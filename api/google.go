@@ -93,11 +93,19 @@ func (a *API) DeleteLoginGoogle(ctx context.Context, request DeleteLoginGoogleRe
 
 	logger.Info("logging out user", slog.String("user-email", token.UserEmail()))
 
+	domain := "icaa.world"
+	if a.env == LOCAL {
+		domain = ""
+	}
+
 	cookie := &http.Cookie{
-		Name:   googleAuthJWTCookieKey,
-		Value:  "",
-		MaxAge: -1,
-		Path:   "/",
+		Name:     googleAuthJWTCookieKey,
+		Value:    "",
+		MaxAge:   -1,
+		Path:     "/",
+		Domain:   domain,
+		Secure:   a.env == PROD,
+		SameSite: http.SameSiteStrictMode,
 	}
 
 	return DeleteLoginGoogle200Response{
