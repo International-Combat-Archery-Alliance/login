@@ -33,6 +33,7 @@ func (a *API) GetLoginGoogleUserInfo(ctx context.Context, request GetLoginGoogle
 		IsAdmin:       token.IsAdmin(),
 		ExpiresAt:     token.ExpiresAt(),
 		ProfilePicURL: token.ProfilePicURL(),
+		UserEmail:     token.UserEmail(),
 	}, nil
 }
 
@@ -72,6 +73,35 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 
 	return PostLoginGoogle200Response{
 		Headers: PostLoginGoogle200ResponseHeaders{
+			SetCookie: cookie.String(),
+		},
+	}, nil
+}
+
+func (a *API) DeleteLoginGoogle(ctx context.Context, request DeleteLoginGoogleRequestObject) (DeleteLoginGoogleResponseObject, error) {
+	logger, ok := middleware.GetLoggerFromCtx(ctx)
+	if !ok {
+		a.logger.Error("no logger in context")
+		logger = a.logger
+	}
+
+	token, ok := middleware.GetJWTFromCtx(ctx)
+	if !ok {
+		logger.Info("non logged in user called logout API")
+		return DeleteLoginGoogle200Response{}, nil
+	}
+
+	logger.Info("logging out user", slog.String("user-email", token.UserEmail()))
+
+	cookie := &http.Cookie{
+		Name:   googleAuthJWTCookieKey,
+		Value:  "",
+		MaxAge: -1,
+		Path:   "/",
+	}
+
+	return DeleteLoginGoogle200Response{
+		Headers: DeleteLoginGoogle200ResponseHeaders{
 			SetCookie: cookie.String(),
 		},
 	}, nil

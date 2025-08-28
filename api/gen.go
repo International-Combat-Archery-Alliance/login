@@ -48,6 +48,7 @@ type UserInfo struct {
 	ExpiresAt     time.Time `json:"expiresAt"`
 	IsAdmin       bool      `json:"isAdmin"`
 	ProfilePicURL string    `json:"profilePicURL"`
+	UserEmail     string    `json:"userEmail"`
 }
 
 // PostLoginGoogleJSONBody defines parameters for PostLoginGoogle.
@@ -60,6 +61,9 @@ type PostLoginGoogleJSONRequestBody PostLoginGoogleJSONBody
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// Logs the user out
+	// (DELETE /login/google)
+	DeleteLoginGoogle(w http.ResponseWriter, r *http.Request)
 	// Logs in and returns the auth cookie
 	// (POST /login/google)
 	PostLoginGoogle(w http.ResponseWriter, r *http.Request)
@@ -76,6 +80,26 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// DeleteLoginGoogle operation middleware
+func (siw *ServerInterfaceWrapper) DeleteLoginGoogle(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, GoogleCookieAuthScopes, []string{})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteLoginGoogle(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // PostLoginGoogle operation middleware
 func (siw *ServerInterfaceWrapper) PostLoginGoogle(w http.ResponseWriter, r *http.Request) {
@@ -233,10 +257,32 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc("DELETE "+options.BaseURL+"/login/google", wrapper.DeleteLoginGoogle)
 	m.HandleFunc("POST "+options.BaseURL+"/login/google", wrapper.PostLoginGoogle)
 	m.HandleFunc("GET "+options.BaseURL+"/login/google/userInfo", wrapper.GetLoginGoogleUserInfo)
 
 	return m
+}
+
+type DeleteLoginGoogleRequestObject struct {
+}
+
+type DeleteLoginGoogleResponseObject interface {
+	VisitDeleteLoginGoogleResponse(w http.ResponseWriter) error
+}
+
+type DeleteLoginGoogle200ResponseHeaders struct {
+	SetCookie string
+}
+
+type DeleteLoginGoogle200Response struct {
+	Headers DeleteLoginGoogle200ResponseHeaders
+}
+
+func (response DeleteLoginGoogle200Response) VisitDeleteLoginGoogleResponse(w http.ResponseWriter) error {
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	return nil
 }
 
 type PostLoginGoogleRequestObject struct {
@@ -297,6 +343,9 @@ func (response GetLoginGoogleUserInfo401JSONResponse) VisitGetLoginGoogleUserInf
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// Logs the user out
+	// (DELETE /login/google)
+	DeleteLoginGoogle(ctx context.Context, request DeleteLoginGoogleRequestObject) (DeleteLoginGoogleResponseObject, error)
 	// Logs in and returns the auth cookie
 	// (POST /login/google)
 	PostLoginGoogle(ctx context.Context, request PostLoginGoogleRequestObject) (PostLoginGoogleResponseObject, error)
@@ -332,6 +381,30 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// DeleteLoginGoogle operation middleware
+func (sh *strictHandler) DeleteLoginGoogle(w http.ResponseWriter, r *http.Request) {
+	var request DeleteLoginGoogleRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteLoginGoogle(ctx, request.(DeleteLoginGoogleRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteLoginGoogle")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteLoginGoogleResponseObject); ok {
+		if err := validResponse.VisitDeleteLoginGoogleResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // PostLoginGoogle operation middleware
@@ -392,21 +465,23 @@ func (sh *strictHandler) GetLoginGoogleUserInfo(w http.ResponseWriter, r *http.R
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
+	"XNN+g84Xr6fTg5z3N/2/AQAA//8/Cyd5WgoAAA==",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file
