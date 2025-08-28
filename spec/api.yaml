@@ -46,6 +46,20 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+    delete:
+      summary: Logs the user out
+      description: For cookie based auth, deletes the cookie, effectively logging the user out.
+      security:
+        - googleCookieAuth: []
+      responses:
+        '200':
+          description: User logged out
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: GOOGLE_AUTH_JWT=; Path=/; Max-Age=0;
+              description: Tells the browser to delete the cookie.
   /login/google/userInfo:
     get:
       summary: Returns info about the logged in user
@@ -80,6 +94,7 @@ components:
         - isAdmin
         - profilePicURL
         - expiresAt
+        - userEmail
       properties:
         isAdmin:
           type: boolean
@@ -88,6 +103,8 @@ components:
         expiresAt:
           type: string
           format: date-time
+        userEmail:
+          type: string
     ErrorCode:
       type: string
       enum:
