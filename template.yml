@@ -1,0 +1,47 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  ICAA Login API
+
+Parameters:
+  architecture:
+    Description: Architecure to run on
+    Type: String
+    # TODO: ideally this would be arm, but it's been a struggle to get arm to actually work with SAM
+    Default: x86_64
+    AllowedValues:
+      - arm64
+      - x86_64
+
+Globals:
+  Function:
+    Timeout: 10
+    MemorySize: 128
+
+Resources:
+  LoginHttp:
+    Type: AWS::Serverless::HttpApi
+  LoginApiMapping:
+    Type: AWS::ApiGatewayV2::ApiMapping
+    Properties:
+      DomainName: api.icaa.world
+      ApiId: !Ref LoginHttp
+      Stage: !Ref LoginHttp.Stage
+      ApiMappingKey: login
+  ICAALogin:
+    Type: AWS::Serverless::Function
+    Properties:
+      PackageType: Image
+      Architectures:
+        - !Ref architecture
+      Events:
+        LoginApi:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref LoginHttp
+            Path: '/{proxy+}'
+            Method: ANY
+    Metadata:
+      DockerTag: v1
+      DockerContext: .
+      Dockerfile: Dockerfile

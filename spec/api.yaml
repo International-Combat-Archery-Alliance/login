@@ -1,0 +1,108 @@
+openapi: 3.0.0
+info:
+  title: ICAA Login
+  version: 1.0.0
+  description: An API for logging into ICAA.
+servers:
+  - url: https://api.icaa.world/
+    description: Production server
+  - url: http://localhost:3001/
+    description: Local dev server
+security:
+  - googleCookieAuth: []
+  - googleBearerAuth: []
+paths:
+  /login/google:
+    post:
+      summary: Logs in and returns the auth cookie
+      requestBody:
+        required: true
+        description: The Google JWT to log in with
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - googleJWT
+              properties:
+                googleJWT:
+                  type: string
+      security: []
+      responses:
+        '200':
+          description: >
+            Auth successful.
+            The JWT is returned in a cookie named `GOOGLE_AUTH_JWT`.
+            You need to include this cookie subsequent requests if using cookie based auth.
+          headers:
+            Set-Cookie:
+              schema: 
+                type: string
+                example: GOOGLE_AUTH_JWT=PASSED_IN_JWT; Path=/; HttpOnly
+              description: The google auth token cookie.
+        '401':
+          description: Unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /login/google/userInfo:
+    get:
+      summary: Returns info about the logged in user
+      responses:
+        '200':
+          description: User info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+        '401':
+          description: Unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    googleCookieAuth:
+      type: apiKey
+      in: cookie
+      name: GOOGLE_AUTH_JWT
+    googleBearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    UserInfo:
+      type: object
+      required:
+        - isAdmin
+        - profilePicURL
+        - expiresAt
+      properties:
+        isAdmin:
+          type: boolean
+        profilePicURL:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+    ErrorCode:
+      type: string
+      enum:
+        - InternalError
+        - AuthError
+        - InputValidationError
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+          example: InternalError
+        message:
+          type: string
+          example: An unexpected error occurred.
