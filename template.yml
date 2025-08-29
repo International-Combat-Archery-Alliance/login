@@ -47,3 +47,8 @@ Resources:
       DockerTag: v1
       DockerContext: .
       Dockerfile: Dockerfile
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ICAALogin}
+      RetentionInDays: 30
