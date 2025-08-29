@@ -34,6 +34,8 @@ Resources:
       PackageType: Image
       Architectures:
         - !Ref architecture
+      LoggingConfig:
+        LogRetentionInDays: 30
       Events:
         LoginApi:
           Type: HttpApi
