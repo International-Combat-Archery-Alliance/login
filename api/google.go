@@ -71,9 +71,15 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 		SameSite: http.SameSiteStrictMode,
 	}
 
-	return PostLoginGoogle200Response{
+	return PostLoginGoogle200JSONResponse{
 		Headers: PostLoginGoogle200ResponseHeaders{
 			SetCookie: cookie.String(),
+		},
+		Body: UserInfo{
+			IsAdmin:       token.IsAdmin(),
+			ExpiresAt:     token.ExpiresAt(),
+			ProfilePicURL: token.ProfilePicURL(),
+			UserEmail:     token.UserEmail(),
 		},
 	}, nil
 }

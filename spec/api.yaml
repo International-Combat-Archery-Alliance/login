@@ -40,6 +40,10 @@ paths:
                 type: string
                 example: GOOGLE_AUTH_JWT=PASSED_IN_JWT; Path=/; HttpOnly
               description: The google auth token cookie.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
         '401':
           description: Unauthorized.
           content:
