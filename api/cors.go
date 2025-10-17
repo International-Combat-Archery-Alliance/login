@@ -27,7 +27,7 @@ func (a *API) corsMiddleware() middleware.MiddlewareFunc {
 		})
 	case PROD:
 		serverCors = cors.New(cors.Options{
-			AllowedOrigins: []string{"https://icaa.world", "https://*-icaa-world.curly-sound-f2cd.workers.dev"},
+			AllowedOrigins: []string{"https://www.icaa.world", "https://icaa.world", "https://www.*-icaa-world.curly-sound-f2cd.workers.dev", "https://*-icaa-world.curly-sound-f2cd.workers.dev"},
 			AllowedMethods: []string{
 				http.MethodHead,
 				http.MethodGet,
