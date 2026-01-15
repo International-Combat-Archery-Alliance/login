@@ -5,8 +5,8 @@ go 1.24.6
 tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
 require (
-	github.com/International-Combat-Archery-Alliance/auth v0.2.0
-	github.com/International-Combat-Archery-Alliance/middleware v0.1.3
+	github.com/International-Combat-Archery-Alliance/auth v0.2.1
+	github.com/International-Combat-Archery-Alliance/middleware v0.1.4
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/oapi-codegen/nethttp-middleware v1.1.2
 	github.com/oapi-codegen/runtime v1.1.2
@@ -23,7 +23,6 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v0.22.4 // indirect
-	github.com/go-openapi/swag v0.25.4 // indirect
 	github.com/go-openapi/swag/jsonname v0.25.4 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect
