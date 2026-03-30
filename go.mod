@@ -9,7 +9,7 @@ require (
 	github.com/International-Combat-Archery-Alliance/middleware v0.1.4
 	github.com/getkin/kin-openapi v0.133.0
 	github.com/oapi-codegen/nethttp-middleware v1.1.2
-	github.com/oapi-codegen/runtime v1.1.2
+	github.com/oapi-codegen/runtime v1.3.1
 	github.com/rs/cors v1.11.1
 )
 
