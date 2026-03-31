@@ -235,3 +235,89 @@ func rolesToUserInfoRoles(roles []auth.Role) []UserInfoRoles {
 	}
 	return result
 }
+
+// GetLoginMe returns info about the logged in user (new endpoint)
+func (a *API) GetLoginMe(ctx context.Context, request GetLoginMeRequestObject) (GetLoginMeResponseObject, error) {
+	// Reuse the same logic as GetLoginGoogleUserInfo
+	logger, ok := middleware.GetLoggerFromCtx(ctx)
+	if !ok {
+		a.logger.Error("no logger in context")
+		logger = a.logger
+	}
+
+	tok, ok := middleware.GetJWTFromCtx(ctx)
+	if !ok {
+		logger.Error("JWT not found in context")
+		return GetLoginMe401JSONResponse{
+			Message: "User is not logged in",
+			Code:    AuthError,
+		}, nil
+	}
+
+	return GetLoginMe200JSONResponse{
+		IsAdmin:       tok.IsAdmin(),
+		ExpiresAt:     tok.ExpiresAt(),
+		ProfilePicURL: tok.ProfilePicURL(),
+		UserEmail:     tok.UserEmail(),
+		Roles:         rolesToUserInfoRoles(tok.Roles()),
+	}, nil
+}
+
+// DeleteLoginSession logs the user out (new endpoint)
+func (a *API) DeleteLoginSession(ctx context.Context, request DeleteLoginSessionRequestObject) (DeleteLoginSessionResponseObject, error) {
+	// Reuse the same logic as DeleteLoginGoogle
+	logger, ok := middleware.GetLoggerFromCtx(ctx)
+	if !ok {
+		a.logger.Error("no logger in context")
+		logger = a.logger
+	}
+
+	tok, ok := middleware.GetJWTFromCtx(ctx)
+	if !ok {
+		logger.Info("non logged in user called logout API")
+		return DeleteLoginSession200Response{}, nil
+	}
+
+	logger.Info("logging out user", slog.String("user-email", tok.UserEmail()))
+
+	// Get refresh token ID from context and delete from store
+	if a.refreshTokenStore != nil {
+		if refreshTokenID, ok := middleware.GetRefreshTokenIDFromCtx(ctx); ok {
+			err := a.refreshTokenStore.Delete(ctx, refreshTokenID)
+			if err != nil {
+				logger.Error("failed to delete refresh token from store", slog.String("error", err.Error()))
+				// Continue anyway - we still want to clear the cookies
+			} else {
+				logger.Info("deleted refresh token from store")
+			}
+		}
+	}
+
+	domain := a.getCookieDomain()
+
+	accessCookie := &http.Cookie{
+		Name:     accessTokenCookieKey,
+		Value:    "",
+		MaxAge:   -1,
+		Path:     "/",
+		Domain:   domain,
+		Secure:   a.env == PROD,
+		SameSite: http.SameSiteStrictMode,
+	}
+
+	refreshCookie := &http.Cookie{
+		Name:     refreshTokenCookieKey,
+		Value:    "",
+		MaxAge:   -1,
+		Path:     "/",
+		Domain:   domain,
+		Secure:   a.env == PROD,
+		SameSite: http.SameSiteStrictMode,
+	}
+
+	return DeleteLoginSession200Response{
+		Headers: DeleteLoginSession200ResponseHeaders{
+			SetCookie: accessCookie.String() + ", " + refreshCookie.String(),
+		},
+	}, nil
+}

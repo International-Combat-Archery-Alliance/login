@@ -52,7 +52,7 @@ paths:
     delete:
       summary: Logs the user out (deprecated, use DELETE /login/session)
       description: |
-        Deprecated: Use DELETE /login/session instead.
+        **Deprecated:** Use DELETE /login/session instead.
         For cookie based auth, deletes the cookies, effectively logging the user out.
       deprecated: true
       security:
@@ -70,9 +70,40 @@ paths:
     get:
       summary: Returns info about the logged in user (deprecated, use GET /login/me)
       description: |
-        Deprecated: Use GET /login/me instead.
+        **Deprecated:** Use GET /login/me instead.
         Returns info about the logged in user.
       deprecated: true
+      responses:
+        '200':
+          description: User info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+        '401':
+          description: Unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /login/session:
+    delete:
+      summary: Logs the user out
+      description: For cookie based auth, deletes the cookies and revokes the refresh token, effectively logging the user out.
+      security:
+        - icaaCookieAuth: []
+      responses:
+        '200':
+          description: User logged out
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+                example: ICAA_ACCESS_TOKEN=; Path=/; Max-Age=0;, ICAA_REFRESH_TOKEN=; Path=/; Max-Age=0;
+              description: Tells the browser to delete the cookies.
+  /login/me:
+    get:
+      summary: Returns info about the logged in user
       responses:
         '200':
           description: User info
