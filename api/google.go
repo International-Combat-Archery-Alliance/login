@@ -4,13 +4,19 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"time"
 
+	"github.com/International-Combat-Archery-Alliance/auth"
+	"github.com/International-Combat-Archery-Alliance/auth/token"
 	"github.com/International-Combat-Archery-Alliance/middleware"
 )
 
 const (
-	googleAudience         = "1008624351875-q36btbijttq83bogn9f8a4srgji0g3qg.apps.googleusercontent.com"
-	googleAuthJWTCookieKey = "GOOGLE_AUTH_JWT"
+	googleAudience = "1008624351875-q36btbijttq83bogn9f8a4srgji0g3qg.apps.googleusercontent.com"
+
+	// Cookie names for ICAA tokens
+	accessTokenCookieKey  = "ICAA_ACCESS_TOKEN"
+	refreshTokenCookieKey = "ICAA_REFRESH_TOKEN"
 )
 
 func (a *API) GetLoginGoogleUserInfo(ctx context.Context, request GetLoginGoogleUserInfoRequestObject) (GetLoginGoogleUserInfoResponseObject, error) {
@@ -20,7 +26,7 @@ func (a *API) GetLoginGoogleUserInfo(ctx context.Context, request GetLoginGoogle
 		logger = a.logger
 	}
 
-	token, ok := middleware.GetJWTFromCtx(ctx)
+	tok, ok := middleware.GetJWTFromCtx(ctx)
 	if !ok {
 		logger.Error("JWT not found in context")
 		return GetLoginGoogleUserInfo401JSONResponse{
@@ -30,10 +36,11 @@ func (a *API) GetLoginGoogleUserInfo(ctx context.Context, request GetLoginGoogle
 	}
 
 	return GetLoginGoogleUserInfo200JSONResponse{
-		IsAdmin:       token.IsAdmin(),
-		ExpiresAt:     token.ExpiresAt(),
-		ProfilePicURL: token.ProfilePicURL(),
-		UserEmail:     token.UserEmail(),
+		IsAdmin:       tok.IsAdmin(),
+		ExpiresAt:     tok.ExpiresAt(),
+		ProfilePicURL: tok.ProfilePicURL(),
+		UserEmail:     tok.UserEmail(),
+		Roles:         rolesToUserInfoRoles(tok.Roles()),
 	}, nil
 }
 
@@ -44,7 +51,8 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 		logger = a.logger
 	}
 
-	token, err := a.tokenValidator.Validate(ctx, request.Body.GoogleJWT, googleAudience)
+	// Validate the Google JWT
+	googleToken, err := a.googleTokenValidator.Validate(ctx, request.Body.GoogleJWT, googleAudience)
 	if err != nil {
 		logger.Error("invalid user jwt", slog.String("error", err.Error()))
 		return PostLoginGoogle401JSONResponse{
@@ -53,17 +61,75 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 		}, nil
 	}
 
-	logger.Info("successful login", slog.String("email", token.UserEmail()))
+	email := googleToken.UserEmail()
+	picture := googleToken.ProfilePicURL()
+	roles := a.getRoles(email)
 
-	domain := "icaa.world"
-	if a.env == LOCAL {
-		domain = ""
+	logger.Info("successful login", slog.String("email", email))
+
+	// Generate ICAA access token
+	accessToken, err := a.tokenService.GenerateAccessToken(email, picture, roles)
+	if err != nil {
+		logger.Error("failed to generate access token", slog.String("error", err.Error()))
+		return PostLoginGoogle401JSONResponse{
+			Message: "Failed to generate authentication tokens",
+			Code:    AuthError,
+		}, nil
 	}
 
-	cookie := &http.Cookie{
-		Name:     googleAuthJWTCookieKey,
-		Value:    request.Body.GoogleJWT,
-		Expires:  token.ExpiresAt(),
+	// Generate ICAA refresh token
+	refreshTokenID, refreshToken, refreshExpiresAt, err := a.tokenService.GenerateRefreshToken()
+	if err != nil {
+		logger.Error("failed to generate refresh token", slog.String("error", err.Error()))
+		return PostLoginGoogle401JSONResponse{
+			Message: "Failed to generate authentication tokens",
+			Code:    AuthError,
+		}, nil
+	}
+
+	// Store refresh token in DynamoDB
+	if a.refreshTokenStore != nil {
+		refreshData := token.RefreshTokenData{
+			UserEmail: email,
+			Picture:   picture,
+			Roles:     roles,
+		}
+		err = a.refreshTokenStore.Save(ctx, refreshTokenID, refreshData, refreshExpiresAt)
+		if err != nil {
+			logger.Error("failed to save refresh token", slog.String("error", err.Error()))
+			return PostLoginGoogle401JSONResponse{
+				Message: "Failed to store authentication tokens",
+				Code:    AuthError,
+			}, nil
+		}
+	}
+
+	domain := a.getCookieDomain()
+
+	// Get access token expiration for cookie
+	accessClaims, _ := a.tokenService.ValidateAccessToken(accessToken)
+	accessExpiresAt := time.Now().Add(token.DefaultAccessTokenLifetime)
+	if accessClaims != nil {
+		accessExpiresAt = accessClaims.ExpiresAt()
+	}
+
+	// Create access token cookie
+	accessCookie := &http.Cookie{
+		Name:     accessTokenCookieKey,
+		Value:    accessToken,
+		Expires:  accessExpiresAt,
+		Domain:   domain,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   a.env == PROD,
+		SameSite: http.SameSiteStrictMode,
+	}
+
+	// Create refresh token cookie
+	refreshCookie := &http.Cookie{
+		Name:     refreshTokenCookieKey,
+		Value:    refreshToken,
+		Expires:  refreshExpiresAt,
 		Domain:   domain,
 		Path:     "/",
 		HttpOnly: true,
@@ -73,13 +139,14 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 
 	return PostLoginGoogle200JSONResponse{
 		Headers: PostLoginGoogle200ResponseHeaders{
-			SetCookie: cookie.String(),
+			SetCookie: accessCookie.String() + ", " + refreshCookie.String(),
 		},
 		Body: UserInfo{
-			IsAdmin:       token.IsAdmin(),
-			ExpiresAt:     token.ExpiresAt(),
-			ProfilePicURL: token.ProfilePicURL(),
-			UserEmail:     token.UserEmail(),
+			IsAdmin:       len(roles) > 0 && roles[0] == auth.RoleAdmin,
+			ExpiresAt:     accessExpiresAt,
+			ProfilePicURL: picture,
+			UserEmail:     email,
+			Roles:         rolesToUserInfoRoles(roles),
 		},
 	}, nil
 }
@@ -91,21 +158,41 @@ func (a *API) DeleteLoginGoogle(ctx context.Context, request DeleteLoginGoogleRe
 		logger = a.logger
 	}
 
-	token, ok := middleware.GetJWTFromCtx(ctx)
+	tok, ok := middleware.GetJWTFromCtx(ctx)
 	if !ok {
 		logger.Info("non logged in user called logout API")
 		return DeleteLoginGoogle200Response{}, nil
 	}
 
-	logger.Info("logging out user", slog.String("user-email", token.UserEmail()))
+	logger.Info("logging out user", slog.String("user-email", tok.UserEmail()))
 
-	domain := "icaa.world"
-	if a.env == LOCAL {
-		domain = ""
+	// Get refresh token ID from context and delete from store
+	if a.refreshTokenStore != nil {
+		if refreshTokenID, ok := middleware.GetRefreshTokenIDFromCtx(ctx); ok {
+			err := a.refreshTokenStore.Delete(ctx, refreshTokenID)
+			if err != nil {
+				logger.Error("failed to delete refresh token from store", slog.String("error", err.Error()))
+				// Continue anyway - we still want to clear the cookies
+			} else {
+				logger.Info("deleted refresh token from store")
+			}
+		}
 	}
 
-	cookie := &http.Cookie{
-		Name:     googleAuthJWTCookieKey,
+	domain := a.getCookieDomain()
+
+	accessCookie := &http.Cookie{
+		Name:     accessTokenCookieKey,
+		Value:    "",
+		MaxAge:   -1,
+		Path:     "/",
+		Domain:   domain,
+		Secure:   a.env == PROD,
+		SameSite: http.SameSiteStrictMode,
+	}
+
+	refreshCookie := &http.Cookie{
+		Name:     refreshTokenCookieKey,
 		Value:    "",
 		MaxAge:   -1,
 		Path:     "/",
@@ -116,7 +203,35 @@ func (a *API) DeleteLoginGoogle(ctx context.Context, request DeleteLoginGoogleRe
 
 	return DeleteLoginGoogle200Response{
 		Headers: DeleteLoginGoogle200ResponseHeaders{
-			SetCookie: cookie.String(),
+			SetCookie: accessCookie.String() + ", " + refreshCookie.String(),
 		},
 	}, nil
+}
+
+// getCookieDomain returns the appropriate cookie domain based on environment
+func (a *API) getCookieDomain() string {
+	if a.env == LOCAL {
+		return ""
+	}
+	return "icaa.world"
+}
+
+// getRoles returns the roles for a user based on admin email list
+func (a *API) getRoles(email string) []auth.Role {
+	if a.isAdmin(email) {
+		return []auth.Role{auth.RoleAdmin}
+	}
+	return nil
+}
+
+// rolesToUserInfoRoles converts auth.Role slice to UserInfoRoles slice
+func rolesToUserInfoRoles(roles []auth.Role) []UserInfoRoles {
+	if roles == nil {
+		return nil
+	}
+	result := make([]UserInfoRoles, len(roles))
+	for i, role := range roles {
+		result[i] = UserInfoRoles(role)
+	}
+	return result
 }

@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/International-Combat-Archery-Alliance/auth"
+	"github.com/International-Combat-Archery-Alliance/auth/token"
 	"github.com/International-Combat-Archery-Alliance/middleware"
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
@@ -18,21 +20,21 @@ import (
 
 var scopeValidators map[string]func(token auth.AuthToken) error = map[string]func(token auth.AuthToken) error{
 	"admin": func(token auth.AuthToken) error {
-		if !token.IsAdmin() {
+		if !slices.Contains(token.Roles(), auth.RoleAdmin) {
 			return fmt.Errorf("user is not an admin")
 		}
 		return nil
 	},
 }
 
-func validateScopes(token auth.AuthToken, scopes []string) error {
+func validateScopes(tok auth.AuthToken, scopes []string) error {
 	for _, scope := range scopes {
 		validator, ok := scopeValidators[scope]
 		if !ok {
 			return fmt.Errorf("unknown scope: %q", scope)
 		}
 
-		err := validator(token)
+		err := validator(tok)
 		if err != nil {
 			return fmt.Errorf("user does not have scope %q", scope)
 		}
@@ -50,44 +52,16 @@ func (a *API) openapiValidateMiddleware(swagger *openapi3.T) middleware.Middlewa
 					logger = slog.Default()
 				}
 
-				var token string
-
 				switch ai.SecuritySchemeName {
-				case "googleCookieAuth":
-					authCookie, err := ai.RequestValidationInput.Request.Cookie(googleAuthJWTCookieKey)
-					if err != nil {
-						return fmt.Errorf("Auth token was not found in cookie %q", googleAuthJWTCookieKey)
-					}
-					token = authCookie.Value
-				case "googleBearerAuth":
-					authHeader := ai.RequestValidationInput.Request.Header.Get("Authorization")
-					if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
-						return fmt.Errorf("Auth token was not found in Authorization header")
-					}
-					token = strings.TrimPrefix(authHeader, "Bearer ")
+				case "icaaCookieAuth":
+					return a.validateAccessTokenCookie(ctx, ai, logger)
+				case "icaaBearerAuth":
+					return a.validateAccessTokenBearer(ctx, ai, logger)
+				case "icaaRefreshCookieAuth":
+					return a.validateRefreshTokenCookie(ctx, ai, logger)
 				default:
-					return fmt.Errorf("unsupported security scheme")
+					return fmt.Errorf("unsupported security scheme: %s", ai.SecuritySchemeName)
 				}
-
-				jwt, err := a.tokenValidator.Validate(ctx, token, googleAudience)
-				if err != nil {
-					return fmt.Errorf("token is not valid")
-				}
-
-				err = validateScopes(jwt, ai.Scopes)
-				if err != nil {
-					logger.Error("user attempted to hit an authenticated API without permissions", slog.String("error", err.Error()))
-
-					return fmt.Errorf("user does not have permissions")
-				}
-
-				loggerWithJwt := logger.With(slog.Any("user-email", jwt.UserEmail()))
-				ctx = middleware.CtxWithJWT(ctx, jwt)
-				ctx = middleware.CtxWithLogger(ctx, loggerWithJwt)
-
-				*ai.RequestValidationInput.Request = *ai.RequestValidationInput.Request.WithContext(ctx)
-
-				return nil
 			},
 		},
 		ErrorHandlerWithOpts: func(ctx context.Context, err error, w http.ResponseWriter, r *http.Request, opts nethttpMiddleware.ErrorHandlerOpts) {
@@ -127,4 +101,68 @@ func (a *API) openapiValidateMiddleware(swagger *openapi3.T) middleware.Middlewa
 			w.Write(jsonBody)
 		},
 	})
+}
+
+func (a *API) validateAccessTokenCookie(ctx context.Context, ai *openapi3filter.AuthenticationInput, logger *slog.Logger) error {
+	authCookie, err := ai.RequestValidationInput.Request.Cookie(accessTokenCookieKey)
+	if err != nil {
+		return fmt.Errorf("auth token was not found in cookie %q", accessTokenCookieKey)
+	}
+
+	return a.validateAndSetAccessToken(ctx, ai, authCookie.Value, logger)
+}
+
+func (a *API) validateAccessTokenBearer(ctx context.Context, ai *openapi3filter.AuthenticationInput, logger *slog.Logger) error {
+	authHeader := ai.RequestValidationInput.Request.Header.Get("Authorization")
+	if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
+		return fmt.Errorf("auth token was not found in Authorization header")
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+
+	return a.validateAndSetAccessToken(ctx, ai, token, logger)
+}
+
+func (a *API) validateAndSetAccessToken(ctx context.Context, ai *openapi3filter.AuthenticationInput, tokenString string, logger *slog.Logger) error {
+	claims, err := a.tokenService.ValidateAccessToken(tokenString)
+	if err != nil {
+		return fmt.Errorf("token is not valid: %w", err)
+	}
+
+	// Create auth token from claims
+	authToken := token.NewICAAAuthToken(claims)
+
+	err = validateScopes(authToken, ai.Scopes)
+	if err != nil {
+		logger.Error("user attempted to hit an authenticated API without permissions", slog.String("error", err.Error()))
+		return fmt.Errorf("user does not have permissions")
+	}
+
+	loggerWithJwt := logger.With(slog.Any("user-email", authToken.UserEmail()))
+	ctx = middleware.CtxWithJWT(ctx, authToken)
+	ctx = middleware.CtxWithLogger(ctx, loggerWithJwt)
+
+	*ai.RequestValidationInput.Request = *ai.RequestValidationInput.Request.WithContext(ctx)
+
+	return nil
+}
+
+func (a *API) validateRefreshTokenCookie(ctx context.Context, ai *openapi3filter.AuthenticationInput, logger *slog.Logger) error {
+	refreshCookie, err := ai.RequestValidationInput.Request.Cookie(refreshTokenCookieKey)
+	if err != nil {
+		return fmt.Errorf("refresh token was not found in cookie %q", refreshTokenCookieKey)
+	}
+
+	tokenID, err := a.tokenService.ValidateRefreshToken(refreshCookie.Value)
+	if err != nil {
+		return fmt.Errorf("refresh token is not valid: %w", err)
+	}
+
+	// Store token ID in context for the handler to use
+	ctx = middleware.CtxWithRefreshTokenID(ctx, tokenID)
+	loggerWithToken := logger.With(slog.String("refresh-token-id", tokenID[:8]+"..."))
+	ctx = middleware.CtxWithLogger(ctx, loggerWithToken)
+
+	*ai.RequestValidationInput.Request = *ai.RequestValidationInput.Request.WithContext(ctx)
+
+	return nil
 }
