@@ -4,8 +4,8 @@ cloud.google.com/go/auth/oauth2adapt v0.2.8 h1:keo8NaayQZ6wimpNSmW5OPc283g65QNIi
 cloud.google.com/go/auth/oauth2adapt v0.2.8/go.mod h1:XQ9y31RkqZCcwJWNSx2Xvric3RrU88hAYYbjDWYDL+c=
 cloud.google.com/go/compute/metadata v0.9.0 h1:pDUj4QMoPejqq20dK0Pg2N4yG9zIkYGdBtwLoEkH9Zs=
 cloud.google.com/go/compute/metadata v0.9.0/go.mod h1:E0bWwX5wTnLPedCKqk3pJmVgCBSM6qQI1yTBdEb3C10=
-github.com/International-Combat-Archery-Alliance/auth v0.3.0 h1:0UK/3Zont90fdyYaSEmzeh1MR4uypLzs+qMPoF9FiWQ=
-github.com/International-Combat-Archery-Alliance/auth v0.3.0/go.mod h1:5bQS/2zDLOw+xKeCBGa9VIt6FOgqNHe76s216dtfK/E=
+github.com/International-Combat-Archery-Alliance/auth v0.3.1 h1:J3/8Z4wtOm2ORi0fSqBqAzM59LNpg0yegDix4fK481w=
+github.com/International-Combat-Archery-Alliance/auth v0.3.1/go.mod h1:5bQS/2zDLOw+xKeCBGa9VIt6FOgqNHe76s216dtfK/E=
 github.com/International-Combat-Archery-Alliance/middleware v0.2.1 h1:Ghgu/ur9yp5C2KBlpXIGtqdNliszJPrCvaVZNamfB5k=
 github.com/International-Combat-Archery-Alliance/middleware v0.2.1/go.mod h1:/QPRfURS8dXuCZ3n9yph3ZTdrxOaz6fehAP2u1GaQmM=
 github.com/aws/aws-sdk-go-v2 v1.41.5 h1:dj5kopbwUsVUVFgO4Fi5BIT3t4WyqIDjGKCangnV/yY=

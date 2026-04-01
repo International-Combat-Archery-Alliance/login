@@ -147,7 +147,7 @@ func (a *API) getRoles(email string) []auth.Role {
 // rolesToUserInfoRoles converts auth.Role slice to UserInfoRoles slice
 func rolesToUserInfoRoles(roles []auth.Role) []UserInfoRoles {
 	if roles == nil {
-		return nil
+		return []UserInfoRoles{}
 	}
 	result := make([]UserInfoRoles, len(roles))
 	for i, role := range roles {
