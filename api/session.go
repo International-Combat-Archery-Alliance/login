@@ -25,15 +25,13 @@ func (a *API) DeleteLoginSession(ctx context.Context, request DeleteLoginSession
 	logger.Info("logging out user", slog.String("user-email", tok.UserEmail()))
 
 	// Get refresh token ID from context and delete from store
-	if a.refreshTokenStore != nil {
-		if refreshTokenID, ok := middleware.GetRefreshTokenIDFromCtx(ctx); ok {
-			err := a.refreshTokenStore.Delete(ctx, refreshTokenID)
-			if err != nil {
-				logger.Error("failed to delete refresh token from store", slog.String("error", err.Error()))
-				// Continue anyway - we still want to clear the cookies
-			} else {
-				logger.Info("deleted refresh token from store")
-			}
+	if refreshTokenID, ok := middleware.GetRefreshTokenIDFromCtx(ctx); ok {
+		err := a.refreshTokenStore.Delete(ctx, refreshTokenID)
+		if err != nil {
+			logger.Error("failed to delete refresh token from store", slog.String("error", err.Error()))
+			// Continue anyway - we still want to clear the cookies
+		} else {
+			logger.Info("deleted refresh token from store")
 		}
 	}
 

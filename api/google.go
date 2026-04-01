@@ -88,20 +88,18 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 	}
 
 	// Store refresh token in DynamoDB
-	if a.refreshTokenStore != nil {
-		refreshData := token.RefreshTokenData{
-			UserEmail: email,
-			Picture:   picture,
-			Roles:     roles,
-		}
-		err = a.refreshTokenStore.Save(ctx, refreshTokenID, refreshData, refreshExpiresAt)
-		if err != nil {
-			logger.Error("failed to save refresh token", slog.String("error", err.Error()))
-			return PostLoginGoogle401JSONResponse{
-				Message: "Failed to store authentication tokens",
-				Code:    AuthError,
-			}, nil
-		}
+	refreshData := token.RefreshTokenData{
+		UserEmail: email,
+		Picture:   picture,
+		Roles:     roles,
+	}
+	err = a.refreshTokenStore.Save(ctx, refreshTokenID, refreshData, refreshExpiresAt)
+	if err != nil {
+		logger.Error("failed to save refresh token", slog.String("error", err.Error()))
+		return PostLoginGoogle401JSONResponse{
+			Message: "Failed to store authentication tokens",
+			Code:    AuthError,
+		}, nil
 	}
 
 	domain := a.getCookieDomain()
@@ -173,15 +171,13 @@ func (a *API) DeleteLoginGoogle(ctx context.Context, request DeleteLoginGoogleRe
 	logger.Info("logging out user", slog.String("user-email", tok.UserEmail()))
 
 	// Get refresh token ID from context and delete from store
-	if a.refreshTokenStore != nil {
-		if refreshTokenID, ok := middleware.GetRefreshTokenIDFromCtx(ctx); ok {
-			err := a.refreshTokenStore.Delete(ctx, refreshTokenID)
-			if err != nil {
-				logger.Error("failed to delete refresh token from store", slog.String("error", err.Error()))
-				// Continue anyway - we still want to clear the cookies
-			} else {
-				logger.Info("deleted refresh token from store")
-			}
+	if refreshTokenID, ok := middleware.GetRefreshTokenIDFromCtx(ctx); ok {
+		err := a.refreshTokenStore.Delete(ctx, refreshTokenID)
+		if err != nil {
+			logger.Error("failed to delete refresh token from store", slog.String("error", err.Error()))
+			// Continue anyway - we still want to clear the cookies
+		} else {
+			logger.Info("deleted refresh token from store")
 		}
 	}
 

@@ -137,7 +137,7 @@ func (a *API) validateAndSetAccessToken(ctx context.Context, ai *openapi3filter.
 		return fmt.Errorf("user does not have permissions")
 	}
 
-	loggerWithJwt := logger.With(slog.Any("user-email", authToken.UserEmail()))
+	loggerWithJwt := logger.With(slog.String("user-email", authToken.UserEmail()))
 	ctx = middleware.CtxWithJWT(ctx, authToken)
 	ctx = middleware.CtxWithLogger(ctx, loggerWithJwt)
 
