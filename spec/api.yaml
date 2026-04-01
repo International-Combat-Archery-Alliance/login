@@ -68,9 +68,9 @@ paths:
               description: Tells the browser to delete the cookies.
   /login/google/userInfo:
     get:
-      summary: Returns info about the logged in user (deprecated, use GET /login/me)
+      summary: Returns info about the logged in user (deprecated, use GET /login/session)
       description: |
-        **Deprecated:** Use GET /login/me instead.
+        **Deprecated:** Use GET /login/session instead.
         Returns info about the logged in user.
       deprecated: true
       responses:
@@ -87,6 +87,22 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
   /login/session:
+    get:
+      summary: Returns info about the current session/user
+      description: Returns information about the currently logged in user.
+      responses:
+        '200':
+          description: User info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+        '401':
+          description: Unauthorized.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
     delete:
       summary: Logs the user out
       description: For cookie based auth, deletes the cookies and revokes the refresh token, effectively logging the user out.
@@ -101,22 +117,6 @@ paths:
                 type: string
                 example: ICAA_ACCESS_TOKEN=; Path=/; Max-Age=0;, ICAA_REFRESH_TOKEN=; Path=/; Max-Age=0;
               description: Tells the browser to delete the cookies.
-  /login/me:
-    get:
-      summary: Returns info about the logged in user
-      responses:
-        '200':
-          description: User info
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserInfo'
-        '401':
-          description: Unauthorized.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
   /login/refresh:
     post:
       summary: Refreshes the access token using a refresh token
