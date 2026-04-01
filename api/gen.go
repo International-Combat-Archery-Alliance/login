@@ -360,7 +360,7 @@ type DeleteLoginGoogleResponseObject interface {
 }
 
 type DeleteLoginGoogle200ResponseHeaders struct {
-	SetCookie string
+	SetCookie []string
 }
 
 type DeleteLoginGoogle200Response struct {
@@ -368,7 +368,11 @@ type DeleteLoginGoogle200Response struct {
 }
 
 func (response DeleteLoginGoogle200Response) VisitDeleteLoginGoogleResponse(w http.ResponseWriter) error {
-	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+
+	for _, cookie := range response.Headers.SetCookie {
+		w.Header().Add("Set-Cookie", cookie)
+	}
+
 	w.WriteHeader(200)
 	return nil
 }
@@ -382,7 +386,7 @@ type PostLoginGoogleResponseObject interface {
 }
 
 type PostLoginGoogle200ResponseHeaders struct {
-	SetCookie string
+	SetCookie []string
 }
 
 type PostLoginGoogle200JSONResponse struct {
@@ -392,7 +396,11 @@ type PostLoginGoogle200JSONResponse struct {
 
 func (response PostLoginGoogle200JSONResponse) VisitPostLoginGoogleResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+
+	for _, cookie := range response.Headers.SetCookie {
+		w.Header().Add("Set-Cookie", cookie)
+	}
+
 	w.WriteHeader(200)
 
 	return json.NewEncoder(w).Encode(response.Body)
@@ -402,6 +410,7 @@ type PostLoginGoogle401JSONResponse Error
 
 func (response PostLoginGoogle401JSONResponse) VisitPostLoginGoogleResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
+
 	w.WriteHeader(401)
 
 	return json.NewEncoder(w).Encode(response)
@@ -418,6 +427,7 @@ type GetLoginGoogleUserInfo200JSONResponse UserInfo
 
 func (response GetLoginGoogleUserInfo200JSONResponse) VisitGetLoginGoogleUserInfoResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
+
 	w.WriteHeader(200)
 
 	return json.NewEncoder(w).Encode(response)
@@ -427,6 +437,7 @@ type GetLoginGoogleUserInfo401JSONResponse Error
 
 func (response GetLoginGoogleUserInfo401JSONResponse) VisitGetLoginGoogleUserInfoResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
+
 	w.WriteHeader(401)
 
 	return json.NewEncoder(w).Encode(response)
@@ -440,7 +451,7 @@ type PostLoginRefreshResponseObject interface {
 }
 
 type PostLoginRefresh200ResponseHeaders struct {
-	SetCookie string
+	SetCookie []string
 }
 
 type PostLoginRefresh200JSONResponse struct {
@@ -450,7 +461,11 @@ type PostLoginRefresh200JSONResponse struct {
 
 func (response PostLoginRefresh200JSONResponse) VisitPostLoginRefreshResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+
+	for _, cookie := range response.Headers.SetCookie {
+		w.Header().Add("Set-Cookie", cookie)
+	}
+
 	w.WriteHeader(200)
 
 	return json.NewEncoder(w).Encode(response.Body)
@@ -460,6 +475,7 @@ type PostLoginRefresh401JSONResponse Error
 
 func (response PostLoginRefresh401JSONResponse) VisitPostLoginRefreshResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
+
 	w.WriteHeader(401)
 
 	return json.NewEncoder(w).Encode(response)
@@ -473,7 +489,7 @@ type DeleteLoginSessionResponseObject interface {
 }
 
 type DeleteLoginSession200ResponseHeaders struct {
-	SetCookie string
+	SetCookie []string
 }
 
 type DeleteLoginSession200Response struct {
@@ -481,7 +497,11 @@ type DeleteLoginSession200Response struct {
 }
 
 func (response DeleteLoginSession200Response) VisitDeleteLoginSessionResponse(w http.ResponseWriter) error {
-	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+
+	for _, cookie := range response.Headers.SetCookie {
+		w.Header().Add("Set-Cookie", cookie)
+	}
+
 	w.WriteHeader(200)
 	return nil
 }
@@ -497,6 +517,7 @@ type GetLoginSession200JSONResponse UserInfo
 
 func (response GetLoginSession200JSONResponse) VisitGetLoginSessionResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
+
 	w.WriteHeader(200)
 
 	return json.NewEncoder(w).Encode(response)
@@ -506,6 +527,7 @@ type GetLoginSession401JSONResponse Error
 
 func (response GetLoginSession401JSONResponse) VisitGetLoginSessionResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
+
 	w.WriteHeader(401)
 
 	return json.NewEncoder(w).Encode(response)

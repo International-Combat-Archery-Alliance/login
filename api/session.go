@@ -61,7 +61,7 @@ func (a *API) DeleteLoginSession(ctx context.Context, request DeleteLoginSession
 
 	return DeleteLoginSession200Response{
 		Headers: DeleteLoginSession200ResponseHeaders{
-			SetCookie: accessCookie.String() + ", " + refreshCookie.String(),
+			SetCookie: []string{accessCookie.String(), refreshCookie.String()},
 		},
 	}, nil
 }

@@ -145,7 +145,7 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 
 	return PostLoginGoogle200JSONResponse{
 		Headers: PostLoginGoogle200ResponseHeaders{
-			SetCookie: accessCookie.String() + ", " + refreshCookie.String(),
+			SetCookie: []string{accessCookie.String(), refreshCookie.String()},
 		},
 		Body: UserInfo{
 			IsAdmin:       slices.Contains(roles, auth.RoleAdmin),
@@ -209,7 +209,7 @@ func (a *API) DeleteLoginGoogle(ctx context.Context, request DeleteLoginGoogleRe
 
 	return DeleteLoginGoogle200Response{
 		Headers: DeleteLoginGoogle200ResponseHeaders{
-			SetCookie: accessCookie.String() + ", " + refreshCookie.String(),
+			SetCookie: []string{accessCookie.String(), refreshCookie.String()},
 		},
 	}, nil
 }

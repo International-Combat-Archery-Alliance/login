@@ -113,7 +113,7 @@ func (a *API) PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequ
 
 	return PostLoginRefresh200JSONResponse{
 		Headers: PostLoginRefresh200ResponseHeaders{
-			SetCookie: accessCookie.String() + ", " + refreshCookie.String(),
+			SetCookie: []string{accessCookie.String(), refreshCookie.String()},
 		},
 		Body: UserInfo{
 			IsAdmin:       len(userData.Roles) > 0,
