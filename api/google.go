@@ -4,7 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"time"
+	"slices"
 
 	"github.com/International-Combat-Archery-Alliance/auth"
 	"github.com/International-Combat-Archery-Alliance/auth/token"
@@ -107,11 +107,17 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 	domain := a.getCookieDomain()
 
 	// Get access token expiration for cookie
-	accessClaims, _ := a.tokenService.ValidateAccessToken(accessToken)
-	accessExpiresAt := time.Now().Add(token.DefaultAccessTokenLifetime)
-	if accessClaims != nil {
-		accessExpiresAt = accessClaims.ExpiresAt()
+	accessClaims, err := a.tokenService.ValidateAccessToken(accessToken)
+	if err != nil {
+		logger.Error("failed to validate generated token somehow", slog.String("error", err.Error()))
+		return PostLoginGoogle401JSONResponse{
+			Message: "Failed to generate authentication token",
+			Code:    AuthError,
+		}, nil
+
 	}
+
+	accessExpiresAt := accessClaims.ExpiresAt()
 
 	// Create access token cookie
 	accessCookie := &http.Cookie{
@@ -142,7 +148,7 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 			SetCookie: accessCookie.String() + ", " + refreshCookie.String(),
 		},
 		Body: UserInfo{
-			IsAdmin:       len(roles) > 0 && roles[0] == auth.RoleAdmin,
+			IsAdmin:       slices.Contains(roles, auth.RoleAdmin),
 			ExpiresAt:     accessExpiresAt,
 			ProfilePicURL: picture,
 			UserEmail:     email,
