@@ -49,43 +49,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-    delete:
-      summary: Logs the user out (deprecated, use DELETE /login/session)
-      description: |
-        **Deprecated:** Use DELETE /login/session instead.
-        For cookie based auth, deletes the cookies, effectively logging the user out.
-      deprecated: true
-      security:
-        - icaaCookieAuth: []
-      responses:
-        '200':
-          description: User logged out
-          headers:
-            Set-Cookie:
-              schema:
-                type: string
-                example: ICAA_ACCESS_TOKEN=; Path=/; Max-Age=0;, ICAA_REFRESH_TOKEN=; Path=/; Max-Age=0;
-              description: Tells the browser to delete the cookies.
-  /login/google/userInfo:
-    get:
-      summary: Returns info about the logged in user (deprecated, use GET /login/session)
-      description: |
-        **Deprecated:** Use GET /login/session instead.
-        Returns info about the logged in user.
-      deprecated: true
-      responses:
-        '200':
-          description: User info
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserInfo'
-        '401':
-          description: Unauthorized.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
   /login/session:
     get:
       summary: Returns info about the current session/user
@@ -166,15 +129,11 @@ components:
     UserInfo:
       type: object
       required:
-        - isAdmin
         - profilePicURL
         - expiresAt
         - userEmail
         - roles
       properties:
-        isAdmin:
-          type: boolean
-          description: Deprecated - use roles array instead. True if user has ADMIN role.
         profilePicURL:
           type: string
         expiresAt:

@@ -51,11 +51,8 @@ type ErrorCode string
 
 // UserInfo defines model for UserInfo.
 type UserInfo struct {
-	ExpiresAt time.Time `json:"expiresAt"`
-
-	// IsAdmin Deprecated - use roles array instead. True if user has ADMIN role.
-	IsAdmin       bool   `json:"isAdmin"`
-	ProfilePicURL string `json:"profilePicURL"`
+	ExpiresAt     time.Time `json:"expiresAt"`
+	ProfilePicURL string    `json:"profilePicURL"`
 
 	// Roles User's assigned roles
 	Roles     []UserInfoRoles `json:"roles"`
@@ -75,15 +72,9 @@ type PostLoginGoogleJSONRequestBody PostLoginGoogleJSONBody
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
-	// Logs the user out (deprecated, use DELETE /login/session)
-	// (DELETE /login/google)
-	DeleteLoginGoogle(w http.ResponseWriter, r *http.Request)
 	// Logs in and returns the auth cookie
 	// (POST /login/google)
 	PostLoginGoogle(w http.ResponseWriter, r *http.Request)
-	// Returns info about the logged in user (deprecated, use GET /login/session)
-	// (GET /login/google/userInfo)
-	GetLoginGoogleUserInfo(w http.ResponseWriter, r *http.Request)
 	// Refreshes the access token using a refresh token
 	// (POST /login/refresh)
 	PostLoginRefresh(w http.ResponseWriter, r *http.Request)
@@ -104,53 +95,11 @@ type ServerInterfaceWrapper struct {
 
 type MiddlewareFunc func(http.Handler) http.Handler
 
-// DeleteLoginGoogle operation middleware
-func (siw *ServerInterfaceWrapper) DeleteLoginGoogle(w http.ResponseWriter, r *http.Request) {
-
-	ctx := r.Context()
-
-	ctx = context.WithValue(ctx, IcaaCookieAuthScopes, []string{})
-
-	r = r.WithContext(ctx)
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteLoginGoogle(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // PostLoginGoogle operation middleware
 func (siw *ServerInterfaceWrapper) PostLoginGoogle(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.PostLoginGoogle(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// GetLoginGoogleUserInfo operation middleware
-func (siw *ServerInterfaceWrapper) GetLoginGoogleUserInfo(w http.ResponseWriter, r *http.Request) {
-
-	ctx := r.Context()
-
-	ctx = context.WithValue(ctx, IcaaCookieAuthScopes, []string{})
-
-	ctx = context.WithValue(ctx, IcaaBearerAuthScopes, []string{})
-
-	r = r.WithContext(ctx)
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetLoginGoogleUserInfo(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -342,39 +291,12 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
-	m.HandleFunc("DELETE "+options.BaseURL+"/login/google", wrapper.DeleteLoginGoogle)
 	m.HandleFunc("POST "+options.BaseURL+"/login/google", wrapper.PostLoginGoogle)
-	m.HandleFunc("GET "+options.BaseURL+"/login/google/userInfo", wrapper.GetLoginGoogleUserInfo)
 	m.HandleFunc("POST "+options.BaseURL+"/login/refresh", wrapper.PostLoginRefresh)
 	m.HandleFunc("DELETE "+options.BaseURL+"/login/session", wrapper.DeleteLoginSession)
 	m.HandleFunc("GET "+options.BaseURL+"/login/session", wrapper.GetLoginSession)
 
 	return m
-}
-
-type DeleteLoginGoogleRequestObject struct {
-}
-
-type DeleteLoginGoogleResponseObject interface {
-	VisitDeleteLoginGoogleResponse(w http.ResponseWriter) error
-}
-
-type DeleteLoginGoogle200ResponseHeaders struct {
-	SetCookie []string
-}
-
-type DeleteLoginGoogle200Response struct {
-	Headers DeleteLoginGoogle200ResponseHeaders
-}
-
-func (response DeleteLoginGoogle200Response) VisitDeleteLoginGoogleResponse(w http.ResponseWriter) error {
-
-	for _, cookie := range response.Headers.SetCookie {
-		w.Header().Add("Set-Cookie", cookie)
-	}
-
-	w.WriteHeader(200)
-	return nil
 }
 
 type PostLoginGoogleRequestObject struct {
@@ -409,33 +331,6 @@ func (response PostLoginGoogle200JSONResponse) VisitPostLoginGoogleResponse(w ht
 type PostLoginGoogle401JSONResponse Error
 
 func (response PostLoginGoogle401JSONResponse) VisitPostLoginGoogleResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-
-	w.WriteHeader(401)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetLoginGoogleUserInfoRequestObject struct {
-}
-
-type GetLoginGoogleUserInfoResponseObject interface {
-	VisitGetLoginGoogleUserInfoResponse(w http.ResponseWriter) error
-}
-
-type GetLoginGoogleUserInfo200JSONResponse UserInfo
-
-func (response GetLoginGoogleUserInfo200JSONResponse) VisitGetLoginGoogleUserInfoResponse(w http.ResponseWriter) error {
-	w.Header().Set("Content-Type", "application/json")
-
-	w.WriteHeader(200)
-
-	return json.NewEncoder(w).Encode(response)
-}
-
-type GetLoginGoogleUserInfo401JSONResponse Error
-
-func (response GetLoginGoogleUserInfo401JSONResponse) VisitGetLoginGoogleUserInfoResponse(w http.ResponseWriter) error {
 	w.Header().Set("Content-Type", "application/json")
 
 	w.WriteHeader(401)
@@ -535,15 +430,9 @@ func (response GetLoginSession401JSONResponse) VisitGetLoginSessionResponse(w ht
 
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
-	// Logs the user out (deprecated, use DELETE /login/session)
-	// (DELETE /login/google)
-	DeleteLoginGoogle(ctx context.Context, request DeleteLoginGoogleRequestObject) (DeleteLoginGoogleResponseObject, error)
 	// Logs in and returns the auth cookie
 	// (POST /login/google)
 	PostLoginGoogle(ctx context.Context, request PostLoginGoogleRequestObject) (PostLoginGoogleResponseObject, error)
-	// Returns info about the logged in user (deprecated, use GET /login/session)
-	// (GET /login/google/userInfo)
-	GetLoginGoogleUserInfo(ctx context.Context, request GetLoginGoogleUserInfoRequestObject) (GetLoginGoogleUserInfoResponseObject, error)
 	// Refreshes the access token using a refresh token
 	// (POST /login/refresh)
 	PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequestObject) (PostLoginRefreshResponseObject, error)
@@ -584,30 +473,6 @@ type strictHandler struct {
 	options     StrictHTTPServerOptions
 }
 
-// DeleteLoginGoogle operation middleware
-func (sh *strictHandler) DeleteLoginGoogle(w http.ResponseWriter, r *http.Request) {
-	var request DeleteLoginGoogleRequestObject
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.DeleteLoginGoogle(ctx, request.(DeleteLoginGoogleRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "DeleteLoginGoogle")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(DeleteLoginGoogleResponseObject); ok {
-		if err := validResponse.VisitDeleteLoginGoogleResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
 // PostLoginGoogle operation middleware
 func (sh *strictHandler) PostLoginGoogle(w http.ResponseWriter, r *http.Request) {
 	var request PostLoginGoogleRequestObject
@@ -632,30 +497,6 @@ func (sh *strictHandler) PostLoginGoogle(w http.ResponseWriter, r *http.Request)
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(PostLoginGoogleResponseObject); ok {
 		if err := validResponse.VisitPostLoginGoogleResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// GetLoginGoogleUserInfo operation middleware
-func (sh *strictHandler) GetLoginGoogleUserInfo(w http.ResponseWriter, r *http.Request) {
-	var request GetLoginGoogleUserInfoRequestObject
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetLoginGoogleUserInfo(ctx, request.(GetLoginGoogleUserInfoRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetLoginGoogleUserInfo")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetLoginGoogleUserInfoResponseObject); ok {
-		if err := validResponse.VisitGetLoginGoogleUserInfoResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -738,30 +579,27 @@ func (sh *strictHandler) GetLoginSession(w http.ResponseWriter, r *http.Request)
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

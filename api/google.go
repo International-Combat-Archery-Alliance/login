@@ -4,7 +4,6 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
-	"slices"
 
 	"github.com/International-Combat-Archery-Alliance/auth"
 	"github.com/International-Combat-Archery-Alliance/auth/token"
@@ -18,31 +17,6 @@ const (
 	accessTokenCookieKey  = "ICAA_ACCESS_TOKEN"
 	refreshTokenCookieKey = "ICAA_REFRESH_TOKEN"
 )
-
-func (a *API) GetLoginGoogleUserInfo(ctx context.Context, request GetLoginGoogleUserInfoRequestObject) (GetLoginGoogleUserInfoResponseObject, error) {
-	logger, ok := middleware.GetLoggerFromCtx(ctx)
-	if !ok {
-		a.logger.Error("no logger in context")
-		logger = a.logger
-	}
-
-	tok, ok := middleware.GetJWTFromCtx(ctx)
-	if !ok {
-		logger.Error("JWT not found in context")
-		return GetLoginGoogleUserInfo401JSONResponse{
-			Message: "User is not logged in",
-			Code:    AuthError,
-		}, nil
-	}
-
-	return GetLoginGoogleUserInfo200JSONResponse{
-		IsAdmin:       tok.IsAdmin(),
-		ExpiresAt:     tok.ExpiresAt(),
-		ProfilePicURL: tok.ProfilePicURL(),
-		UserEmail:     tok.UserEmail(),
-		Roles:         rolesToUserInfoRoles(tok.Roles()),
-	}, nil
-}
 
 func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleRequestObject) (PostLoginGoogleResponseObject, error) {
 	logger, ok := middleware.GetLoggerFromCtx(ctx)
@@ -146,66 +120,10 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 			SetCookie: []string{accessCookie.String(), refreshCookie.String()},
 		},
 		Body: UserInfo{
-			IsAdmin:       slices.Contains(roles, auth.RoleAdmin),
 			ExpiresAt:     accessExpiresAt,
 			ProfilePicURL: picture,
 			UserEmail:     email,
 			Roles:         rolesToUserInfoRoles(roles),
-		},
-	}, nil
-}
-
-func (a *API) DeleteLoginGoogle(ctx context.Context, request DeleteLoginGoogleRequestObject) (DeleteLoginGoogleResponseObject, error) {
-	logger, ok := middleware.GetLoggerFromCtx(ctx)
-	if !ok {
-		a.logger.Error("no logger in context")
-		logger = a.logger
-	}
-
-	tok, ok := middleware.GetJWTFromCtx(ctx)
-	if !ok {
-		logger.Info("non logged in user called logout API")
-		return DeleteLoginGoogle200Response{}, nil
-	}
-
-	logger.Info("logging out user", slog.String("user-email", tok.UserEmail()))
-
-	// Get refresh token ID from context and delete from store
-	if refreshTokenID, ok := middleware.GetRefreshTokenIDFromCtx(ctx); ok {
-		err := a.refreshTokenStore.Delete(ctx, refreshTokenID)
-		if err != nil {
-			logger.Error("failed to delete refresh token from store", slog.String("error", err.Error()))
-			// Continue anyway - we still want to clear the cookies
-		} else {
-			logger.Info("deleted refresh token from store")
-		}
-	}
-
-	domain := a.getCookieDomain()
-
-	accessCookie := &http.Cookie{
-		Name:     accessTokenCookieKey,
-		Value:    "",
-		MaxAge:   -1,
-		Path:     "/",
-		Domain:   domain,
-		Secure:   a.env == PROD,
-		SameSite: http.SameSiteStrictMode,
-	}
-
-	refreshCookie := &http.Cookie{
-		Name:     refreshTokenCookieKey,
-		Value:    "",
-		MaxAge:   -1,
-		Path:     "/",
-		Domain:   domain,
-		Secure:   a.env == PROD,
-		SameSite: http.SameSiteStrictMode,
-	}
-
-	return DeleteLoginGoogle200Response{
-		Headers: DeleteLoginGoogle200ResponseHeaders{
-			SetCookie: []string{accessCookie.String(), refreshCookie.String()},
 		},
 	}, nil
 }
