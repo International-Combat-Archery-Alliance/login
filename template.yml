@@ -28,12 +28,52 @@ Resources:
       ApiId: !Ref LoginHttp
       Stage: !Ref LoginHttp.Stage
       ApiMappingKey: login
+
+  # DynamoDB Table for refresh tokens and other login-related data
+  LoginApiTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: login-api
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
   ICAALogin:
     Type: AWS::Serverless::Function
     Properties:
       PackageType: Image
       Architectures:
         - !Ref architecture
+      Environment:
+        Variables:
+          DYNAMO_TABLE_NAME: !Ref LoginApiTable
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:DeleteItem
+              Resource: !GetAtt LoginApiTable.Arn
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource:
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/jwtSigningKeys"
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/adminEmails"
       Events:
         LoginApi:
           Type: HttpApi
@@ -45,6 +85,7 @@ Resources:
       DockerTag: v1
       DockerContext: .
       Dockerfile: Dockerfile
+
   LogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
