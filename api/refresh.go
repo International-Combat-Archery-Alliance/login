@@ -116,7 +116,6 @@ func (a *API) PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequ
 			SetCookie: []string{accessCookie.String(), refreshCookie.String()},
 		},
 		Body: UserInfo{
-			IsAdmin:       len(userData.Roles) > 0,
 			ExpiresAt:     accessExpiresAt,
 			ProfilePicURL: userData.Picture,
 			UserEmail:     userData.UserEmail,

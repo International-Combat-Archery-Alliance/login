@@ -82,7 +82,6 @@ func (a *API) GetLoginSession(ctx context.Context, request GetLoginSessionReques
 	}
 
 	return GetLoginSession200JSONResponse{
-		IsAdmin:       tok.IsAdmin(),
 		ExpiresAt:     tok.ExpiresAt(),
 		ProfilePicURL: tok.ProfilePicURL(),
 		UserEmail:     tok.UserEmail(),
