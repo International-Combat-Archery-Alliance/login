@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/International-Combat-Archery-Alliance/auth/google"
@@ -97,12 +99,22 @@ func main() {
 	})
 
 	serverSettings := getServerSettingsFromEnv()
-	err = loginApi.ListenAndServe(serverSettings.Host, serverSettings.Port)
-	if err != nil {
+
+	sigCtx, sigStop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer sigStop()
+
+	serverErrCh := make(chan error, 1)
+	go func() {
+		serverErrCh <- loginApi.ListenAndServe(serverSettings.Host, serverSettings.Port)
+	}()
+
+	select {
+	case <-sigCtx.Done():
+		logger.Info("shutting down gracefully")
+	case err := <-serverErrCh:
 		logger.Error("error running server", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	logger.Info("shutting down")
 }
 
 type ServerSettings struct {
