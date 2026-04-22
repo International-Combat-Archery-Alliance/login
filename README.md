@@ -36,7 +36,13 @@ A secure authentication service for the International Combat Archery Alliance (I
    cd login
    ```
 
-2. **Build and run locally**
+2. **Start shared infrastructure**
+   Shared infrastructure (DynamoDB, Jaeger, LocalStack) is managed in `icaa.world/docker-compose.yml`.
+   ```bash
+   cd ../icaa.world && docker compose up -d
+   ```
+
+3. **Build and run locally**
    ```bash
    make local
    ```

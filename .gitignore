@@ -31,4 +31,7 @@ go.work.sum
 # .idea/
 # .vscode/
 
-.aws-sam
+.aws-sam*
+bootstrap
+
+env.json

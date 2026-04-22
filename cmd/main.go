@@ -14,11 +14,13 @@ import (
 	"github.com/International-Combat-Archery-Alliance/auth/token"
 	"github.com/International-Combat-Archery-Alliance/login/api"
 	"github.com/International-Combat-Archery-Alliance/login/dynamo"
+	"github.com/International-Combat-Archery-Alliance/login/telemetry"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 )
 
 const (
@@ -32,6 +34,19 @@ const (
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	traceShutdown, err := telemetry.Init(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize telemetry: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := traceShutdown(shutdownCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to shutdown telemetry: %v\n", err)
+		}
+	}()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -142,6 +157,8 @@ func createLocalDynamoClient(ctx context.Context) (*dynamodb.Client, error) {
 		return nil, err
 	}
 
+	otelaws.AppendMiddlewares(&cfg.APIOptions)
+
 	return dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
 		o.BaseEndpoint = aws.String("http://dynamodb:8000")
 	}), nil
@@ -152,6 +169,9 @@ func createProdDynamoClient(ctx context.Context) (*dynamodb.Client, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	otelaws.AppendMiddlewares(&cfg.APIOptions)
+
 	return dynamodb.NewFromConfig(cfg), nil
 }
 

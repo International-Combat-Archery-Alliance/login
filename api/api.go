@@ -11,6 +11,9 @@ import (
 	"github.com/International-Combat-Archery-Alliance/auth"
 	"github.com/International-Combat-Archery-Alliance/auth/token"
 	"github.com/International-Combat-Archery-Alliance/middleware"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Environment int
@@ -35,6 +38,7 @@ var _ StrictServerInterface = (*API)(nil)
 type API struct {
 	logger               *slog.Logger
 	env                  Environment
+	tracer               trace.Tracer
 	googleTokenValidator auth.Validator
 	tokenService         *token.TokenService
 	refreshTokenStore    token.RefreshTokenStore
@@ -51,6 +55,7 @@ func NewAPI(config Config) *API {
 	return &API{
 		logger:               config.Logger,
 		env:                  config.Environment,
+		tracer:               otel.Tracer("github.com/International-Combat-Archery-Alliance/login/api"),
 		googleTokenValidator: config.GoogleTokenValidator,
 		tokenService:         config.TokenService,
 		refreshTokenStore:    config.RefreshTokenStore,
@@ -105,6 +110,7 @@ func (a *API) ListenAndServe(host string, port string) error {
 	}
 
 	h := middleware.UseMiddlewares(r, middlewares...)
+	h = otelhttp.NewHandler(h, "")
 
 	s := &http.Server{
 		Handler: h,

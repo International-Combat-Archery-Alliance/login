@@ -5,5 +5,4 @@ build:
 
 .PHONY: local
 local: build
-	docker-compose up -d
-	sam local start-api --docker-network icaa-login --parameter-overrides architecture=x86_64 -p 3001
+	sam local start-api --docker-network icaa-shared --parameter-overrides architecture=x86_64 --env-vars env.json -p 3001

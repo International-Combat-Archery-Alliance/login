@@ -9,6 +9,9 @@ import (
 )
 
 func (a *API) PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequestObject) (PostLoginRefreshResponseObject, error) {
+	ctx, span := a.tracer.Start(ctx, "PostLoginRefresh")
+	defer span.End()
+
 	logger, ok := middleware.GetLoggerFromCtx(ctx)
 	if !ok {
 		a.logger.Error("no logger in context")
@@ -28,6 +31,7 @@ func (a *API) PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequ
 	// Look up the refresh token in the store
 	userData, err := a.refreshTokenStore.Get(ctx, tokenID)
 	if err != nil {
+		span.RecordError(err)
 		logger.Error("refresh token not found in store", slog.String("error", err.Error()))
 		return PostLoginRefresh401JSONResponse{
 			Message: "Invalid refresh token",
@@ -38,6 +42,7 @@ func (a *API) PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequ
 	// Delete the old refresh token (token rotation)
 	err = a.refreshTokenStore.Delete(ctx, tokenID)
 	if err != nil {
+		span.RecordError(err)
 		logger.Error("failed to delete old refresh token", slog.String("error", err.Error()))
 		// Continue anyway - we'll generate a new one
 	}
@@ -45,6 +50,7 @@ func (a *API) PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequ
 	// Generate new access token using stored picture and roles
 	accessToken, err := a.tokenService.GenerateAccessToken(userData.UserEmail, userData.Picture, userData.Roles)
 	if err != nil {
+		span.RecordError(err)
 		logger.Error("failed to generate access token", slog.String("error", err.Error()))
 		return PostLoginRefresh401JSONResponse{
 			Message: "Failed to generate authentication tokens",
@@ -55,6 +61,7 @@ func (a *API) PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequ
 	// Generate new refresh token
 	newRefreshTokenID, newRefreshToken, newRefreshExpiresAt, err := a.tokenService.GenerateRefreshToken()
 	if err != nil {
+		span.RecordError(err)
 		logger.Error("failed to generate refresh token", slog.String("error", err.Error()))
 		return PostLoginRefresh401JSONResponse{
 			Message: "Failed to generate authentication tokens",
@@ -65,6 +72,7 @@ func (a *API) PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequ
 	// Store new refresh token with same user data
 	err = a.refreshTokenStore.Save(ctx, newRefreshTokenID, *userData, newRefreshExpiresAt)
 	if err != nil {
+		span.RecordError(err)
 		logger.Error("failed to save refresh token", slog.String("error", err.Error()))
 		return PostLoginRefresh401JSONResponse{
 			Message: "Failed to store authentication tokens",
@@ -79,6 +87,7 @@ func (a *API) PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequ
 	// Get access token expiration
 	accessClaims, err := a.tokenService.ValidateAccessToken(accessToken)
 	if err != nil {
+		span.RecordError(err)
 		logger.Error("somehow generated a bad access token", slog.String("error", err.Error()))
 		return PostLoginRefresh401JSONResponse{
 			Message: "Bad access token",

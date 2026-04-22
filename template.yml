@@ -12,6 +12,10 @@ Parameters:
     AllowedValues:
       - arm64
       - x86_64
+  OTELCollectorEndpoint:
+    Type: String
+    Default: "localhost:4317"
+    Description: OpenTelemetry collector endpoint
 
 Globals:
   Function:
@@ -60,6 +64,7 @@ Resources:
       Environment:
         Variables:
           DYNAMO_TABLE_NAME: !Ref LoginApiTable
+          OTEL_COLLECTOR_ENDPOINT: !Ref OTELCollectorEndpoint
       Policies:
         - Statement:
             - Effect: Allow
@@ -74,6 +79,7 @@ Resources:
               Resource:
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/jwtSigningKeys"
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/adminEmails"
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/newrelic-license-key"
       Events:
         LoginApi:
           Type: HttpApi
