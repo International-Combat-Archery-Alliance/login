@@ -21,6 +21,10 @@ Globals:
   Function:
     Timeout: 10
     MemorySize: 128
+    Environment:
+      Variables:
+        OTEL_COLLECTOR_ENDPOINT: !Ref OTELCollectorEndpoint
+        DYNAMO_TABLE_NAME: login-api
 
 Resources:
   LoginHttp:
@@ -61,10 +65,6 @@ Resources:
       PackageType: Image
       Architectures:
         - !Ref architecture
-      Environment:
-        Variables:
-          DYNAMO_TABLE_NAME: !Ref LoginApiTable
-          OTEL_COLLECTOR_ENDPOINT: !Ref OTELCollectorEndpoint
       Policies:
         - Statement:
             - Effect: Allow
