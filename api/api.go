@@ -2,16 +2,17 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/International-Combat-Archery-Alliance/auth"
 	"github.com/International-Combat-Archery-Alliance/auth/token"
 	"github.com/International-Combat-Archery-Alliance/middleware"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -31,6 +32,7 @@ type Config struct {
 	AdminEmails          []string
 	Logger               *slog.Logger
 	Environment          Environment
+	FlushTraces          func(context.Context) error
 }
 
 var _ StrictServerInterface = (*API)(nil)
@@ -43,6 +45,7 @@ type API struct {
 	tokenService         *token.TokenService
 	refreshTokenStore    token.RefreshTokenStore
 	adminEmails          map[string]bool
+	flushTraces          func(context.Context) error
 }
 
 func NewAPI(config Config) *API {
@@ -60,6 +63,7 @@ func NewAPI(config Config) *API {
 		tokenService:         config.TokenService,
 		refreshTokenStore:    config.RefreshTokenStore,
 		adminEmails:          adminMap,
+		flushTraces:          config.FlushTraces,
 	}
 }
 
@@ -103,6 +107,8 @@ func (a *API) ListenAndServe(host string, port string) error {
 		corsMiddleware,
 		swaggerUIMiddleware,
 		middleware.AccessLogging(a.logger),
+		middleware.OTELHandler,
+		middleware.FlushTraces(a.flushTraces, a.logger, 3*time.Second),
 	}
 
 	if a.env == PROD {
@@ -110,7 +116,6 @@ func (a *API) ListenAndServe(host string, port string) error {
 	}
 
 	h := middleware.UseMiddlewares(r, middlewares...)
-	h = otelhttp.NewHandler(h, "")
 
 	s := &http.Server{
 		Handler: h,

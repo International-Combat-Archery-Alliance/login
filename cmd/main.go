@@ -16,43 +16,44 @@ import (
 	"github.com/International-Combat-Archery-Alliance/auth/token"
 	"github.com/International-Combat-Archery-Alliance/login/api"
 	"github.com/International-Combat-Archery-Alliance/login/dynamo"
-	"github.com/International-Combat-Archery-Alliance/login/telemetry"
+	"github.com/International-Combat-Archery-Alliance/telemetry"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
-	"go.opentelemetry.io/contrib/instrumentation/github.com/aws/aws-sdk-go-v2/otelaws"
 )
 
 const (
-	dynamoDBTableName     = "login-api"
-	jwtSigningKeyEnvVar   = "JWT_SIGNING_KEY"
-	jwtSigningKeysSSMPath = "/jwtSigningKeys"
-	adminEmailsEnvVar     = "ADMIN_EMAILS"
-	adminEmailsSSMPath    = "/adminEmails"
+	dynamoDBTableName      = "login-api"
+	jwtSigningKeyEnvVar    = "JWT_SIGNING_KEY"
+	jwtSigningKeysSSMPath  = "/jwtSigningKeys"
+	adminEmailsEnvVar      = "ADMIN_EMAILS"
+	adminEmailsSSMPath     = "/adminEmails"
+	newRelicLicenseEnvVar  = "NEW_RELIC_LICENSE_KEY"
+	newRelicLicenseSSMPath = "/newrelic-license-key"
 )
 
 func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	traceShutdown, err := telemetry.Init(ctx)
+	env := getApiEnvironment()
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	traceShutdown, flushTraces, err := initTelemetry(ctx, logger)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to initialize telemetry: %v\n", err)
+		logger.Error("failed to initialize telemetry", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer func() {
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer shutdownCancel()
 		if err := traceShutdown(shutdownCtx); err != nil {
-			fmt.Fprintf(os.Stderr, "failed to shutdown telemetry: %v\n", err)
+			logger.Error("failed to shutdown telemetry", slog.String("error", err.Error()))
 		}
 	}()
-
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-
-	env := getApiEnvironment()
 
 	// Initialize Google token validator (for validating Google OAuth tokens during login)
 	googleTokenValidator, err := google.NewValidator(ctx)
@@ -96,6 +97,7 @@ func main() {
 		AdminEmails:          adminEmails,
 		Logger:               logger,
 		Environment:          env,
+		FlushTraces:          flushTraces,
 	})
 
 	serverSettings := getServerSettingsFromEnv()
@@ -148,6 +150,28 @@ func getApiEnvironment() api.Environment {
 	return api.PROD
 }
 
+func initTelemetry(ctx context.Context, logger *slog.Logger) (shutdown func(context.Context) error, flush func(context.Context) error, err error) {
+	licenseKey, err := getNewRelicLicenseKey(ctx, getApiEnvironment())
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get New Relic license key: %w", err)
+	}
+
+	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if endpoint == "" {
+		endpoint = "otlp.nr-data.net:4317"
+	}
+
+	return telemetry.Init(ctx, telemetry.Options{
+		ServiceName: "login",
+		Endpoint:    endpoint,
+		APIKey:      licenseKey,
+		Lambda:      telemetry.LambdaInfoFromEnv(),
+		ErrorHandler: func(err error) {
+			logger.Error("otel error", slog.String("error", err.Error()))
+		},
+	})
+}
+
 func createDynamoClient(ctx context.Context, env api.Environment) (*dynamodb.Client, error) {
 	if env == api.LOCAL {
 		return createLocalDynamoClient(ctx)
@@ -155,8 +179,17 @@ func createDynamoClient(ctx context.Context, env api.Environment) (*dynamodb.Cli
 	return createProdDynamoClient(ctx)
 }
 
+func loadAWSConfig(ctx context.Context, optFns ...func(*config.LoadOptions) error) (aws.Config, error) {
+	cfg, err := config.LoadDefaultConfig(ctx, optFns...)
+	if err != nil {
+		return aws.Config{}, err
+	}
+	telemetry.InstrumentAWSConfig(&cfg)
+	return cfg, nil
+}
+
 func createLocalDynamoClient(ctx context.Context) (*dynamodb.Client, error) {
-	cfg, err := config.LoadDefaultConfig(ctx,
+	cfg, err := loadAWSConfig(ctx,
 		config.WithRegion("localhost"),
 		config.WithCredentialsProvider(credentials.StaticCredentialsProvider{
 			Value: aws.Credentials{
@@ -169,20 +202,16 @@ func createLocalDynamoClient(ctx context.Context) (*dynamodb.Client, error) {
 		return nil, err
 	}
 
-	otelaws.AppendMiddlewares(&cfg.APIOptions)
-
 	return dynamodb.NewFromConfig(cfg, func(o *dynamodb.Options) {
 		o.BaseEndpoint = aws.String("http://dynamodb:8000")
 	}), nil
 }
 
 func createProdDynamoClient(ctx context.Context) (*dynamodb.Client, error) {
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := loadAWSConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	otelaws.AppendMiddlewares(&cfg.APIOptions)
 
 	return dynamodb.NewFromConfig(cfg), nil
 }
@@ -211,7 +240,7 @@ func getJWTSigningKeys(ctx context.Context, env api.Environment) (map[string]tok
 	}
 
 	// Production: retrieve from AWS Parameter Store
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := loadAWSConfig(ctx)
 	if err != nil {
 		return nil, "", fmt.Errorf("unable to load AWS SDK config: %w", err)
 	}
@@ -266,7 +295,7 @@ func getAdminEmails(ctx context.Context, env api.Environment) ([]string, error) 
 	}
 
 	// Production: retrieve from AWS Parameter Store
-	cfg, err := config.LoadDefaultConfig(ctx)
+	cfg, err := loadAWSConfig(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("unable to load AWS SDK config: %w", err)
 	}
@@ -282,6 +311,31 @@ func getAdminEmails(ctx context.Context, env api.Environment) ([]string, error) 
 	}
 
 	return parseEmailList(*result.Parameter.Value), nil
+}
+
+// getNewRelicLicenseKey retrieves the New Relic license key from environment variable (local)
+// or AWS Parameter Store (production)
+func getNewRelicLicenseKey(ctx context.Context, env api.Environment) (string, error) {
+	if env == api.LOCAL {
+		return os.Getenv(newRelicLicenseEnvVar), nil
+	}
+
+	cfg, err := loadAWSConfig(ctx)
+	if err != nil {
+		return "", fmt.Errorf("unable to load AWS SDK config: %w", err)
+	}
+
+	client := ssm.NewFromConfig(cfg)
+
+	result, err := client.GetParameter(ctx, &ssm.GetParameterInput{
+		Name:           aws.String(newRelicLicenseSSMPath),
+		WithDecryption: aws.Bool(true),
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to get New Relic license key from Parameter Store: %w", err)
+	}
+
+	return *result.Parameter.Value, nil
 }
 
 // parseEmailList parses a comma-separated list of emails

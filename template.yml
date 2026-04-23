@@ -12,10 +12,6 @@ Parameters:
     AllowedValues:
       - arm64
       - x86_64
-  OTELCollectorEndpoint:
-    Type: String
-    Default: "localhost:4317"
-    Description: OpenTelemetry collector endpoint
 
 Globals:
   Function:
@@ -23,7 +19,6 @@ Globals:
     MemorySize: 128
     Environment:
       Variables:
-        OTEL_COLLECTOR_ENDPOINT: !Ref OTELCollectorEndpoint
         DYNAMO_TABLE_NAME: login-api
 
 Resources:
