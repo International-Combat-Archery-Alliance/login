@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/International-Combat-Archery-Alliance/auth"
 	"github.com/International-Combat-Archery-Alliance/auth/google"
 	"github.com/International-Combat-Archery-Alliance/auth/token"
 	"github.com/International-Combat-Archery-Alliance/login/api"
@@ -22,6 +23,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"go.opentelemetry.io/otel"
 )
 
 const (
@@ -55,16 +57,32 @@ func main() {
 		}
 	}()
 
+	// Start a root trace span for startup
+	tracer := otel.Tracer("github.com/International-Combat-Archery-Alliance/login/cmd")
+	ctx, span := tracer.Start(ctx, "startup")
+	defer span.End()
+
 	// Initialize Google token validator (for validating Google OAuth tokens during login)
-	googleTokenValidator, err := google.NewValidator(ctx)
-	if err != nil {
+	var googleTokenValidator auth.Validator
+	if err := telemetry.RunWithSpan(ctx, tracer, "init-google-validator", func(ctx context.Context) error {
+		var err error
+		googleTokenValidator, err = google.NewValidator(ctx)
+		return err
+	}); err != nil {
+		span.RecordError(err)
 		logger.Error("error creating google token validator", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
 	// Initialize JWT signing keys
-	signingKeys, currentKeyID, err := getJWTSigningKeys(ctx, env)
-	if err != nil {
+	var signingKeys map[string]token.SigningKey
+	var currentKeyID string
+	if err := telemetry.RunWithSpan(ctx, tracer, "init-jwt-signing-keys", func(ctx context.Context) error {
+		var err error
+		signingKeys, currentKeyID, err = getJWTSigningKeys(ctx, env)
+		return err
+	}); err != nil {
+		span.RecordError(err)
 		logger.Error("error getting JWT signing keys", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
@@ -76,16 +94,26 @@ func main() {
 	)
 
 	// Initialize DynamoDB client and refresh token store
-	dynamoClient, err := createDynamoClient(ctx, env)
-	if err != nil {
+	var dynamoClient *dynamodb.Client
+	if err := telemetry.RunWithSpan(ctx, tracer, "init-dynamodb-client", func(ctx context.Context) error {
+		var err error
+		dynamoClient, err = createDynamoClient(ctx, env)
+		return err
+	}); err != nil {
+		span.RecordError(err)
 		logger.Error("error creating DynamoDB client", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 	refreshTokenStore := dynamo.NewDynamoDBRefreshTokenStore(dynamoClient, dynamoDBTableName)
 
 	// Get admin emails
-	adminEmails, err := getAdminEmails(ctx, env)
-	if err != nil {
+	var adminEmails []string
+	if err := telemetry.RunWithSpan(ctx, tracer, "init-admin-emails", func(ctx context.Context) error {
+		var err error
+		adminEmails, err = getAdminEmails(ctx, env)
+		return err
+	}); err != nil {
+		span.RecordError(err)
 		logger.Error("error getting admin emails", slog.String("error", err.Error()))
 		os.Exit(1)
 	}

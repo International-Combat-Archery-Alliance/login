@@ -7,7 +7,7 @@ tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 require (
 	github.com/International-Combat-Archery-Alliance/auth v0.3.1
 	github.com/International-Combat-Archery-Alliance/middleware v0.4.0
-	github.com/International-Combat-Archery-Alliance/telemetry v0.1.0
+	github.com/International-Combat-Archery-Alliance/telemetry v0.2.0
 	github.com/aws/aws-sdk-go-v2 v1.41.5
 	github.com/aws/aws-sdk-go-v2/config v1.32.13
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.13
