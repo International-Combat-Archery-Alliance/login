@@ -60,7 +60,6 @@ func main() {
 	// Start a root trace span for startup
 	tracer := otel.Tracer("github.com/International-Combat-Archery-Alliance/login/cmd")
 	ctx, span := tracer.Start(ctx, "startup")
-	defer span.End()
 
 	// Initialize Google token validator (for validating Google OAuth tokens during login)
 	var googleTokenValidator auth.Validator
@@ -117,6 +116,9 @@ func main() {
 		logger.Error("error getting admin emails", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+
+	// End startup span after initialization completes
+	span.End()
 
 	loginApi := api.NewAPI(api.Config{
 		GoogleTokenValidator: googleTokenValidator,
