@@ -2,15 +2,19 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/International-Combat-Archery-Alliance/auth"
 	"github.com/International-Combat-Archery-Alliance/auth/token"
 	"github.com/International-Combat-Archery-Alliance/middleware"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type Environment int
@@ -28,6 +32,7 @@ type Config struct {
 	AdminEmails          []string
 	Logger               *slog.Logger
 	Environment          Environment
+	FlushTraces          func(context.Context) error
 }
 
 var _ StrictServerInterface = (*API)(nil)
@@ -35,10 +40,12 @@ var _ StrictServerInterface = (*API)(nil)
 type API struct {
 	logger               *slog.Logger
 	env                  Environment
+	tracer               trace.Tracer
 	googleTokenValidator auth.Validator
 	tokenService         *token.TokenService
 	refreshTokenStore    token.RefreshTokenStore
 	adminEmails          map[string]bool
+	flushTraces          func(context.Context) error
 }
 
 func NewAPI(config Config) *API {
@@ -51,10 +58,12 @@ func NewAPI(config Config) *API {
 	return &API{
 		logger:               config.Logger,
 		env:                  config.Environment,
+		tracer:               otel.Tracer("github.com/International-Combat-Archery-Alliance/login/api"),
 		googleTokenValidator: config.GoogleTokenValidator,
 		tokenService:         config.TokenService,
 		refreshTokenStore:    config.RefreshTokenStore,
 		adminEmails:          adminMap,
+		flushTraces:          config.FlushTraces,
 	}
 }
 
@@ -98,6 +107,8 @@ func (a *API) ListenAndServe(host string, port string) error {
 		corsMiddleware,
 		swaggerUIMiddleware,
 		middleware.AccessLogging(a.logger),
+		middleware.OTELHandler,
+		middleware.FlushTraces(a.flushTraces, a.logger, 3*time.Second),
 	}
 
 	if a.env == PROD {

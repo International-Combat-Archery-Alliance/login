@@ -19,6 +19,9 @@ const (
 )
 
 func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleRequestObject) (PostLoginGoogleResponseObject, error) {
+	ctx, span := a.tracer.Start(ctx, "PostLoginGoogle")
+	defer span.End()
+
 	logger, ok := middleware.GetLoggerFromCtx(ctx)
 	if !ok {
 		a.logger.Error("no logger in context")
@@ -28,6 +31,7 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 	// Validate the Google JWT
 	googleToken, err := a.googleTokenValidator.Validate(ctx, request.Body.GoogleJWT, googleAudience)
 	if err != nil {
+		span.RecordError(err)
 		logger.Error("invalid user jwt", slog.String("error", err.Error()))
 		return PostLoginGoogle401JSONResponse{
 			Message: "Invalid JWT",
@@ -44,6 +48,7 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 	// Generate ICAA access token
 	accessToken, err := a.tokenService.GenerateAccessToken(email, picture, roles)
 	if err != nil {
+		span.RecordError(err)
 		logger.Error("failed to generate access token", slog.String("error", err.Error()))
 		return PostLoginGoogle401JSONResponse{
 			Message: "Failed to generate authentication tokens",
@@ -54,6 +59,7 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 	// Generate ICAA refresh token
 	refreshTokenID, refreshToken, refreshExpiresAt, err := a.tokenService.GenerateRefreshToken()
 	if err != nil {
+		span.RecordError(err)
 		logger.Error("failed to generate refresh token", slog.String("error", err.Error()))
 		return PostLoginGoogle401JSONResponse{
 			Message: "Failed to generate authentication tokens",
@@ -69,6 +75,7 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 	}
 	err = a.refreshTokenStore.Save(ctx, refreshTokenID, refreshData, refreshExpiresAt)
 	if err != nil {
+		span.RecordError(err)
 		logger.Error("failed to save refresh token", slog.String("error", err.Error()))
 		return PostLoginGoogle401JSONResponse{
 			Message: "Failed to store authentication tokens",
@@ -81,6 +88,7 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 	// Get access token expiration for cookie
 	accessClaims, err := a.tokenService.ValidateAccessToken(accessToken)
 	if err != nil {
+		span.RecordError(err)
 		logger.Error("failed to validate generated token somehow", slog.String("error", err.Error()))
 		return PostLoginGoogle401JSONResponse{
 			Message: "Failed to generate authentication token",

@@ -10,6 +10,9 @@ import (
 
 // DeleteLoginSession logs the user out
 func (a *API) DeleteLoginSession(ctx context.Context, request DeleteLoginSessionRequestObject) (DeleteLoginSessionResponseObject, error) {
+	ctx, span := a.tracer.Start(ctx, "DeleteLoginSession")
+	defer span.End()
+
 	logger, ok := middleware.GetLoggerFromCtx(ctx)
 	if !ok {
 		a.logger.Error("no logger in context")
@@ -28,6 +31,7 @@ func (a *API) DeleteLoginSession(ctx context.Context, request DeleteLoginSession
 	if refreshTokenID, ok := middleware.GetRefreshTokenIDFromCtx(ctx); ok {
 		err := a.refreshTokenStore.Delete(ctx, refreshTokenID)
 		if err != nil {
+			span.RecordError(err)
 			logger.Error("failed to delete refresh token from store", slog.String("error", err.Error()))
 			// Continue anyway - we still want to clear the cookies
 		} else {
@@ -66,6 +70,9 @@ func (a *API) DeleteLoginSession(ctx context.Context, request DeleteLoginSession
 
 // GetLoginSession returns info about the current session/user
 func (a *API) GetLoginSession(ctx context.Context, request GetLoginSessionRequestObject) (GetLoginSessionResponseObject, error) {
+	ctx, span := a.tracer.Start(ctx, "GetLoginSession")
+	defer span.End()
+
 	logger, ok := middleware.GetLoggerFromCtx(ctx)
 	if !ok {
 		a.logger.Error("no logger in context")
