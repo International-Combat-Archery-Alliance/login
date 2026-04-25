@@ -72,6 +72,7 @@ Resources:
             - Effect: Allow
               Action:
                 - ssm:GetParameter
+                - ssm:GetParameters
               Resource:
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/jwtSigningKeys"
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/adminEmails"
