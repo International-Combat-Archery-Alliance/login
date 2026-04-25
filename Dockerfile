@@ -7,7 +7,7 @@ RUN go mod download
 
 ADD . /app/
 
-RUN go build -o bootstrap cmd/main.go
+RUN go build -o bootstrap ./cmd
 
 FROM alpine
 
