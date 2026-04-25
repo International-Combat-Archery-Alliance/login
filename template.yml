@@ -20,6 +20,7 @@ Globals:
     Environment:
       Variables:
         DYNAMO_TABLE_NAME: login-api
+        OTEL_EXPORTER_OTLP_ENDPOINT: ""
 
 Resources:
   LoginHttp:
