@@ -6,8 +6,8 @@ cloud.google.com/go/compute/metadata v0.9.0 h1:pDUj4QMoPejqq20dK0Pg2N4yG9zIkYGdB
 cloud.google.com/go/compute/metadata v0.9.0/go.mod h1:E0bWwX5wTnLPedCKqk3pJmVgCBSM6qQI1yTBdEb3C10=
 github.com/International-Combat-Archery-Alliance/auth v0.3.1 h1:J3/8Z4wtOm2ORi0fSqBqAzM59LNpg0yegDix4fK481w=
 github.com/International-Combat-Archery-Alliance/auth v0.3.1/go.mod h1:5bQS/2zDLOw+xKeCBGa9VIt6FOgqNHe76s216dtfK/E=
-github.com/International-Combat-Archery-Alliance/middleware v0.4.0 h1:Q5Hov3WzUcgYOX4FNzkQcO65jlPYpWDVjx16UBZOZpQ=
-github.com/International-Combat-Archery-Alliance/middleware v0.4.0/go.mod h1:W5agYaAIyixBuUHBzMHTFs0OYFYaeAum2PS4lSxh//U=
+github.com/International-Combat-Archery-Alliance/middleware v0.5.0 h1:zEfREiAW/Q5nvEf3ZAg2wFiaOV9IrjkTvCSNcwp+IR8=
+github.com/International-Combat-Archery-Alliance/middleware v0.5.0/go.mod h1:W5agYaAIyixBuUHBzMHTFs0OYFYaeAum2PS4lSxh//U=
 github.com/International-Combat-Archery-Alliance/telemetry v0.2.0 h1:5NJOVZBkHvZahfJgpWaOv1xvYR56WbVPG5NLOoz9s6U=
 github.com/International-Combat-Archery-Alliance/telemetry v0.2.0/go.mod h1:TcYpUKuamws0CcgslxWyAXIWzf+gv5/qYoKVGl6saNo=
 github.com/aws/aws-sdk-go-v2 v1.41.5 h1:dj5kopbwUsVUVFgO4Fi5BIT3t4WyqIDjGKCangnV/yY=
