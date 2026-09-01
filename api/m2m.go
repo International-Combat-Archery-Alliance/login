@@ -32,8 +32,8 @@ const (
 	jwksCacheControl = "public, max-age=300, stale-while-revalidate=3600"
 )
 
-// M2MStore provides machine-credential lookup (CLIENT#) and the m2m
-// fixed-window limiter + lockout (RATE#), ADR-0006 hardening.
+// M2MStore provides machine-credential lookup plus the fixed-window limiter
+// and lockout used by the m2m token exchange (ADR-0006 hardening).
 type M2MStore interface {
 	GetClient(ctx context.Context, clientID string) (*dynamo.MachineClientItem, error)
 	BumpWindow(ctx context.Context, clientID string, now time.Time) (*dynamo.RateWindow, error)

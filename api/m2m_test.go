@@ -307,7 +307,7 @@ func TestPostLoginV1M2mTokensRecordFailureErrorStill401(t *testing.T) {
 // service side (auth lib KeyCache with the dev public key).
 func validateWithTestCache(t *testing.T, priv *rsa.PrivateKey, tokenString, audience, scope string) (*token.MachineTokenClaims, error) {
 	t.Helper()
-	cache := token.NewKeyCache("", "", nil,
+	cache := token.NewKeyCache("",
 		token.WithDevKeys(map[string]*rsa.PublicKey{"machine-test": &priv.PublicKey}),
 	)
 	return cache.ValidateMachineToken(context.Background(), tokenString, audience, scope)

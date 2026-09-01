@@ -66,8 +66,8 @@ make build
 `POST /login/v1/m2m-tokens` (client-credentials) and
 `GET /login/.well-known/jwks.json` implement service-to-service JWT auth.
 Only `login` ever holds the private signing key; every other service verifies
-with public keys from the JWKS endpoint **and** the `/jwtPublicKeys` SSM
-parameter (the availability floor).
+with public keys fetched from the JWKS endpoint (last-known-good per instance —
+no SSM public-key floor; project decision, see `auth/token/keycache.go`).
 
 ### Manual SSM provisioning (rotation is a manual step)
 
@@ -90,23 +90,11 @@ ADR-0006 rotation runbook).
 2. **`/userJwtSigningKeys`** — same format, `user-*` namespaced kids; needed
    once ADR-0007 lands.
 
-3. **`/jwtPublicKeys`** — public halves of every active key (machine-* and
-   user-*), in the same JWKS shape as the endpoint:
-   ```json
-   {
-     "keys": [
-       {"kty": "RSA", "kid": "machine-01", "use": "sig", "alg": "RS256", "n": "...", "e": "AQAB"}
-     ]
-   }
-   ```
-   _Written in the same step as the signing-key change — never one without the
-   other, or verifiers lose the floor / see half-rotated keys._
-
-4. **`/m2m/<clientId>/secret`** (SecureString) — the caller's client secret,
+3. **`/m2m/<clientId>/secret`** (SecureString) — the caller's client secret,
    **≥ 32 bytes CSPRNG** (e.g. `openssl rand -base64 48`). The caller role
    (`event-registration`) reads this; login never does.
 
-5. **`CLIENT#<clientId>` item** in the `login-api` DynamoDB table — the bcrypt
+4. **`CLIENT#<clientId>` item** in the `login-api` DynamoDB table — the bcrypt
    hash side of the credential, plus the client's allowed audience + scope:
    ```json
    {
@@ -124,7 +112,7 @@ ADR-0006 rotation runbook).
    (`secretRounds` is an array: keep the previous round until all callers have
    recycled, then remove it.)
 
-6. **Rate-limit records** (`RATE#<clientId>`) are created automatically by the
+5. **Rate-limit records** (`RATE#<clientId>`) are created automatically by the
    endpoint; DynamoDB TTL cleans them up (`ttl` is already enabled on the
    table).
 
