@@ -161,12 +161,37 @@ func setupApi(logger *slog.Logger) (*api.API, func(context.Context) error, error
 		token.WithSigningKeys(cfg.JWTSigningKeys, cfg.JWTCurrentKeyID),
 	)
 
+	machineTokenSigner, err := token.NewMachineTokenSigner(cfg.MachineSigningKeys, cfg.MachineCurrentKeyID)
+	if err != nil {
+		startupSpan.RecordError(err)
+		startupSpan.End()
+		return nil, traceShutdown, fmt.Errorf("machine token signer: %w", err)
+	}
+
 	refreshTokenStore := dynamo.NewDynamoDBRefreshTokenStore(db, dynamoDBTableName)
+	m2mStore := dynamo.NewM2MStore(db, dynamoDBTableName)
+
+	// JWKS serving: prod derives public keys from the signing-key SSM params
+	// (TTL-cached, last-known-good); local serves the dev keypair directly.
+	var jwksProvider api.JWKSProvider
+	if env == api.LOCAL {
+		jwksProvider = staticJWKSProvider{jwks: keypairJWKS(cfg.MachineSigningKeys)}
+	} else {
+		jwksProvider, err = newSSMJWKSProvider(ctx, logger)
+		if err != nil {
+			startupSpan.RecordError(err)
+			startupSpan.End()
+			return nil, traceShutdown, fmt.Errorf("jwks provider: %w", err)
+		}
+	}
 
 	loginAPI := api.NewAPI(api.Config{
 		GoogleTokenValidator: googleTokenValidator,
 		TokenService:         tokenService,
 		RefreshTokenStore:    refreshTokenStore,
+		MachineTokenSigner:   machineTokenSigner,
+		M2MStore:             m2mStore,
+		JWKSProvider:         jwksProvider,
 		AdminEmails:          cfg.AdminEmails,
 		Logger:               logger,
 		Environment:          env,

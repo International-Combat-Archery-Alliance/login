@@ -107,6 +107,83 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+  /login/v1/m2m-tokens:
+    post:
+      summary: Exchanges machine client credentials for a short-lived JWT
+      description: >
+        Client-credentials exchange for service-to-service authentication (ADR-0006).
+        The machine client authenticates with HTTP Basic auth
+        (Authorization: Basic base64(clientId:clientSecret)).
+        On success a 5-minute RS256 machine JWT is returned.
+        Internet-facing and rate limited (DynamoDB fixed-window counter + lockout);
+        429 is returned when throttled or locked out.
+      security: []
+      parameters:
+        - name: Authorization
+          in: header
+          required: true
+          description: HTTP Basic credentials - base64(clientId:clientSecret).
+          schema:
+            type: string
+            minLength: 8
+      responses:
+        '200':
+          description: Machine token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessToken'
+        '400':
+          description: Missing or malformed Basic credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unknown clientId or invalid clientSecret (invalid_client)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '429':
+          description: Rate limited or locked out
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error (e.g. failed to load signing keys)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /login/.well-known/jwks.json:
+    get:
+      summary: Returns the JSON Web Key Set for ICAA token verification
+      description: >
+        Serves the public keys (RSA, kid namespaces machine-* / user-*) used to
+        verify ICAA JWTs. The same key material is mirrored to the /jwtPublicKeys
+        SSM parameter (the availability floor) in the same rotation step.
+      security: []
+      responses:
+        '200':
+          description: JWK set
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                example: public, max-age=300, stale-while-revalidate=3600
+              description: Cacheable for 5 minutes, allow stale reuse for an hour.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JWKS'
+        '500':
+          description: Failed to load signing keys
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
 components:
   securitySchemes:
@@ -154,6 +231,7 @@ components:
         - InternalError
         - AuthError
         - InputValidationError
+        - RateLimited
     Error:
       type: object
       required:
@@ -166,3 +244,63 @@ components:
         message:
           type: string
           example: An unexpected error occurred.
+    AccessToken:
+      type: object
+      description: A short-lived machine JWT (ADR-0006), plus its metadata.
+      required:
+        - access_token
+        - token_type
+        - expires_in
+      properties:
+        access_token:
+          type: string
+          description: The RS256 machine JWT (Bearer).
+        token_type:
+          type: string
+          enum:
+            - Bearer
+        expires_in:
+          type: integer
+          description: Token lifetime in seconds (300 = 5 minutes).
+          example: 300
+    JWKS:
+      type: object
+      description: JSON Web Key Set served by login and mirrored to /jwtPublicKeys SSM.
+      required:
+        - keys
+      properties:
+        keys:
+          type: array
+          items:
+            $ref: '#/components/schemas/JWK'
+    JWK:
+      type: object
+      description: RSA public key (RFC 7517), kid namespaced machine-* or user-*.
+      required:
+        - kty
+        - kid
+        - n
+        - e
+      properties:
+        kty:
+          type: string
+          enum:
+            - RSA
+        kid:
+          type: string
+          example: machine-01
+        use:
+          type: string
+          enum:
+            - sig
+          description: Key use - signing.
+        alg:
+          type: string
+          enum:
+            - RS256
+        n:
+          type: string
+          description: Base64url-encoded RSA modulus.
+        e:
+          type: string
+          description: Base64url-encoded RSA public exponent.

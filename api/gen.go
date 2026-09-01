@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
+	"github.com/oapi-codegen/runtime"
 	strictnethttp "github.com/oapi-codegen/runtime/strictmiddleware/nethttp"
 )
 
@@ -28,17 +29,51 @@ const (
 	IcaaRefreshCookieAuthScopes = "icaaRefreshCookieAuth.Scopes"
 )
 
+// Defines values for AccessTokenTokenType.
+const (
+	Bearer AccessTokenTokenType = "Bearer"
+)
+
 // Defines values for ErrorCode.
 const (
 	AuthError            ErrorCode = "AuthError"
 	InputValidationError ErrorCode = "InputValidationError"
 	InternalError        ErrorCode = "InternalError"
+	RateLimited          ErrorCode = "RateLimited"
+)
+
+// Defines values for JWKAlg.
+const (
+	RS256 JWKAlg = "RS256"
+)
+
+// Defines values for JWKKty.
+const (
+	RSA JWKKty = "RSA"
+)
+
+// Defines values for JWKUse.
+const (
+	Sig JWKUse = "sig"
 )
 
 // Defines values for UserInfoRoles.
 const (
 	ADMIN UserInfoRoles = "ADMIN"
 )
+
+// AccessToken A short-lived machine JWT (ADR-0006), plus its metadata.
+type AccessToken struct {
+	// AccessToken The RS256 machine JWT (Bearer).
+	AccessToken string `json:"access_token"`
+
+	// ExpiresIn Token lifetime in seconds (300 = 5 minutes).
+	ExpiresIn int                  `json:"expires_in"`
+	TokenType AccessTokenTokenType `json:"token_type"`
+}
+
+// AccessTokenTokenType defines model for AccessToken.TokenType.
+type AccessTokenTokenType string
 
 // Error defines model for Error.
 type Error struct {
@@ -48,6 +83,36 @@ type Error struct {
 
 // ErrorCode defines model for ErrorCode.
 type ErrorCode string
+
+// JWK RSA public key (RFC 7517), kid namespaced machine-* or user-*.
+type JWK struct {
+	Alg *JWKAlg `json:"alg,omitempty"`
+
+	// E Base64url-encoded RSA public exponent.
+	E   string `json:"e"`
+	Kid string `json:"kid"`
+	Kty JWKKty `json:"kty"`
+
+	// N Base64url-encoded RSA modulus.
+	N string `json:"n"`
+
+	// Use Key use - signing.
+	Use *JWKUse `json:"use,omitempty"`
+}
+
+// JWKAlg defines model for JWK.Alg.
+type JWKAlg string
+
+// JWKKty defines model for JWK.Kty.
+type JWKKty string
+
+// JWKUse Key use - signing.
+type JWKUse string
+
+// JWKS JSON Web Key Set served by login and mirrored to /jwtPublicKeys SSM.
+type JWKS struct {
+	Keys []JWK `json:"keys"`
+}
 
 // UserInfo defines model for UserInfo.
 type UserInfo struct {
@@ -67,11 +132,20 @@ type PostLoginGoogleJSONBody struct {
 	GoogleJWT string `json:"googleJWT"`
 }
 
+// PostLoginV1M2mTokensParams defines parameters for PostLoginV1M2mTokens.
+type PostLoginV1M2mTokensParams struct {
+	// Authorization HTTP Basic credentials - base64(clientId:clientSecret).
+	Authorization string `json:"Authorization"`
+}
+
 // PostLoginGoogleJSONRequestBody defines body for PostLoginGoogle for application/json ContentType.
 type PostLoginGoogleJSONRequestBody PostLoginGoogleJSONBody
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+	// Returns the JSON Web Key Set for ICAA token verification
+	// (GET /login/.well-known/jwks.json)
+	GetLoginWellKnownJwksJson(w http.ResponseWriter, r *http.Request)
 	// Logs in and returns the auth cookie
 	// (POST /login/google)
 	PostLoginGoogle(w http.ResponseWriter, r *http.Request)
@@ -84,6 +158,9 @@ type ServerInterface interface {
 	// Returns info about the current session/user
 	// (GET /login/session)
 	GetLoginSession(w http.ResponseWriter, r *http.Request)
+	// Exchanges machine client credentials for a short-lived JWT
+	// (POST /login/v1/m2m-tokens)
+	PostLoginV1M2mTokens(w http.ResponseWriter, r *http.Request, params PostLoginV1M2mTokensParams)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -94,6 +171,20 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// GetLoginWellKnownJwksJson operation middleware
+func (siw *ServerInterfaceWrapper) GetLoginWellKnownJwksJson(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetLoginWellKnownJwksJson(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // PostLoginGoogle operation middleware
 func (siw *ServerInterfaceWrapper) PostLoginGoogle(w http.ResponseWriter, r *http.Request) {
@@ -162,6 +253,50 @@ func (siw *ServerInterfaceWrapper) GetLoginSession(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetLoginSession(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PostLoginV1M2mTokens operation middleware
+func (siw *ServerInterfaceWrapper) PostLoginV1M2mTokens(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PostLoginV1M2mTokensParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Authorization" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Authorization")]; found {
+		var Authorization string
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Authorization", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Authorization", valueList[0], &Authorization, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Authorization", Err: err})
+			return
+		}
+
+		params.Authorization = Authorization
+
+	} else {
+		err := fmt.Errorf("Header parameter Authorization is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Authorization", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PostLoginV1M2mTokens(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -291,12 +426,50 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc("GET "+options.BaseURL+"/login/.well-known/jwks.json", wrapper.GetLoginWellKnownJwksJson)
 	m.HandleFunc("POST "+options.BaseURL+"/login/google", wrapper.PostLoginGoogle)
 	m.HandleFunc("POST "+options.BaseURL+"/login/refresh", wrapper.PostLoginRefresh)
 	m.HandleFunc("DELETE "+options.BaseURL+"/login/session", wrapper.DeleteLoginSession)
 	m.HandleFunc("GET "+options.BaseURL+"/login/session", wrapper.GetLoginSession)
+	m.HandleFunc("POST "+options.BaseURL+"/login/v1/m2m-tokens", wrapper.PostLoginV1M2mTokens)
 
 	return m
+}
+
+type GetLoginWellKnownJwksJsonRequestObject struct {
+}
+
+type GetLoginWellKnownJwksJsonResponseObject interface {
+	VisitGetLoginWellKnownJwksJsonResponse(w http.ResponseWriter) error
+}
+
+type GetLoginWellKnownJwksJson200ResponseHeaders struct {
+	CacheControl string
+}
+
+type GetLoginWellKnownJwksJson200JSONResponse struct {
+	Body    JWKS
+	Headers GetLoginWellKnownJwksJson200ResponseHeaders
+}
+
+func (response GetLoginWellKnownJwksJson200JSONResponse) VisitGetLoginWellKnownJwksJsonResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.Header().Set("Cache-Control", fmt.Sprint(response.Headers.CacheControl))
+
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response.Body)
+}
+
+type GetLoginWellKnownJwksJson500JSONResponse Error
+
+func (response GetLoginWellKnownJwksJson500JSONResponse) VisitGetLoginWellKnownJwksJsonResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
 }
 
 type PostLoginGoogleRequestObject struct {
@@ -428,8 +601,69 @@ func (response GetLoginSession401JSONResponse) VisitGetLoginSessionResponse(w ht
 	return json.NewEncoder(w).Encode(response)
 }
 
+type PostLoginV1M2mTokensRequestObject struct {
+	Params PostLoginV1M2mTokensParams
+}
+
+type PostLoginV1M2mTokensResponseObject interface {
+	VisitPostLoginV1M2mTokensResponse(w http.ResponseWriter) error
+}
+
+type PostLoginV1M2mTokens200JSONResponse AccessToken
+
+func (response PostLoginV1M2mTokens200JSONResponse) VisitPostLoginV1M2mTokensResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mTokens400JSONResponse Error
+
+func (response PostLoginV1M2mTokens400JSONResponse) VisitPostLoginV1M2mTokensResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mTokens401JSONResponse Error
+
+func (response PostLoginV1M2mTokens401JSONResponse) VisitPostLoginV1M2mTokensResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mTokens429JSONResponse Error
+
+func (response PostLoginV1M2mTokens429JSONResponse) VisitPostLoginV1M2mTokensResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(429)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mTokens500JSONResponse Error
+
+func (response PostLoginV1M2mTokens500JSONResponse) VisitPostLoginV1M2mTokensResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
+	// Returns the JSON Web Key Set for ICAA token verification
+	// (GET /login/.well-known/jwks.json)
+	GetLoginWellKnownJwksJson(ctx context.Context, request GetLoginWellKnownJwksJsonRequestObject) (GetLoginWellKnownJwksJsonResponseObject, error)
 	// Logs in and returns the auth cookie
 	// (POST /login/google)
 	PostLoginGoogle(ctx context.Context, request PostLoginGoogleRequestObject) (PostLoginGoogleResponseObject, error)
@@ -442,6 +676,9 @@ type StrictServerInterface interface {
 	// Returns info about the current session/user
 	// (GET /login/session)
 	GetLoginSession(ctx context.Context, request GetLoginSessionRequestObject) (GetLoginSessionResponseObject, error)
+	// Exchanges machine client credentials for a short-lived JWT
+	// (POST /login/v1/m2m-tokens)
+	PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTokensRequestObject) (PostLoginV1M2mTokensResponseObject, error)
 }
 
 type StrictHandlerFunc = strictnethttp.StrictHTTPHandlerFunc
@@ -471,6 +708,30 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// GetLoginWellKnownJwksJson operation middleware
+func (sh *strictHandler) GetLoginWellKnownJwksJson(w http.ResponseWriter, r *http.Request) {
+	var request GetLoginWellKnownJwksJsonRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetLoginWellKnownJwksJson(ctx, request.(GetLoginWellKnownJwksJsonRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetLoginWellKnownJwksJson")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetLoginWellKnownJwksJsonResponseObject); ok {
+		if err := validResponse.VisitGetLoginWellKnownJwksJsonResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // PostLoginGoogle operation middleware
@@ -576,30 +837,72 @@ func (sh *strictHandler) GetLoginSession(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// PostLoginV1M2mTokens operation middleware
+func (sh *strictHandler) PostLoginV1M2mTokens(w http.ResponseWriter, r *http.Request, params PostLoginV1M2mTokensParams) {
+	var request PostLoginV1M2mTokensRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PostLoginV1M2mTokens(ctx, request.(PostLoginV1M2mTokensRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PostLoginV1M2mTokens")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PostLoginV1M2mTokensResponseObject); ok {
+		if err := validResponse.VisitPostLoginV1M2mTokensResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

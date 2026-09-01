@@ -29,6 +29,9 @@ type Config struct {
 	GoogleTokenValidator auth.Validator
 	TokenService         *token.TokenService
 	RefreshTokenStore    token.RefreshTokenStore
+	MachineTokenSigner   *token.MachineTokenSigner
+	M2MStore             M2MStore
+	JWKSProvider         JWKSProvider
 	AdminEmails          []string
 	Logger               *slog.Logger
 	Environment          Environment
@@ -44,8 +47,14 @@ type API struct {
 	googleTokenValidator auth.Validator
 	tokenService         *token.TokenService
 	refreshTokenStore    token.RefreshTokenStore
+	machineTokenSigner   *token.MachineTokenSigner
+	m2mStore             M2MStore
+	jwksProvider         JWKSProvider
 	adminEmails          map[string]bool
 	flushTraces          func(context.Context) error
+	// dummyClientSecretHash equalizes the unknown-client bcrypt timing path
+	// (ADR-0006 appendix).
+	dummyClientSecretHash []byte
 }
 
 func NewAPI(config Config) *API {
@@ -56,14 +65,18 @@ func NewAPI(config Config) *API {
 	}
 
 	return &API{
-		logger:               config.Logger,
-		env:                  config.Environment,
-		tracer:               otel.Tracer("github.com/International-Combat-Archery-Alliance/login/api"),
-		googleTokenValidator: config.GoogleTokenValidator,
-		tokenService:         config.TokenService,
-		refreshTokenStore:    config.RefreshTokenStore,
-		adminEmails:          adminMap,
-		flushTraces:          config.FlushTraces,
+		logger:                config.Logger,
+		env:                   config.Environment,
+		tracer:                otel.Tracer("github.com/International-Combat-Archery-Alliance/login/api"),
+		googleTokenValidator:  config.GoogleTokenValidator,
+		tokenService:          config.TokenService,
+		refreshTokenStore:     config.RefreshTokenStore,
+		machineTokenSigner:    config.MachineTokenSigner,
+		m2mStore:              config.M2MStore,
+		jwksProvider:          config.JWKSProvider,
+		adminEmails:           adminMap,
+		flushTraces:           config.FlushTraces,
+		dummyClientSecretHash: makeDummyClientSecretHash(),
 	}
 }
 

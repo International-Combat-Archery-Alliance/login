@@ -67,6 +67,7 @@ Resources:
               Action:
                 - dynamodb:GetItem
                 - dynamodb:PutItem
+                - dynamodb:UpdateItem
                 - dynamodb:DeleteItem
               Resource: !GetAtt LoginApiTable.Arn
             - Effect: Allow
@@ -75,6 +76,8 @@ Resources:
                 - ssm:GetParameters
               Resource:
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/jwtSigningKeys"
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/machineJwtSigningKeys"
+                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/userJwtSigningKeys"
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/adminEmails"
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/newrelic-license-key"
       Events:
