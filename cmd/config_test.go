@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"testing"
+
+	"github.com/International-Combat-Archery-Alliance/login/api"
 )
 
 func generateECKey() (*ecdsa.PrivateKey, error) {
@@ -85,4 +87,47 @@ func TestParseRSAPrivateKeyPEMRejectsNonRSA(t *testing.T) {
 	if _, err := parseRSAPrivateKeyPEM(pemStr); err == nil {
 		t.Fatal("expected non-RSA key to be rejected")
 	}
+}
+
+func TestGetApiEnvironment(t *testing.T) {
+	t.Run("default is prod", func(t *testing.T) {
+		t.Setenv("AWS_SAM_LOCAL", "")
+		t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "")
+		t.Setenv("AWS_EXECUTION_ENVIRONMENT", "")
+		env, err := getApiEnvironment()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if env != api.PROD {
+			t.Fatalf("env = %v, want PROD", env)
+		}
+	})
+
+	t.Run("local outside lambda", func(t *testing.T) {
+		t.Setenv("AWS_SAM_LOCAL", "true")
+		t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "")
+		t.Setenv("AWS_EXECUTION_ENVIRONMENT", "")
+		env, err := getApiEnvironment()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if env != api.LOCAL {
+			t.Fatalf("env = %v, want LOCAL", env)
+		}
+	})
+
+	t.Run("local refuses inside lambda runtime", func(t *testing.T) {
+		// A prod Lambda with AWS_SAM_LOCAL=true (misconfig) must fail closed:
+		// dev keys are never installed in a real runtime.
+		t.Setenv("AWS_SAM_LOCAL", "true")
+		t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "login")
+		if _, err := getApiEnvironment(); err == nil {
+			t.Fatal("expected LOCAL mode inside a Lambda runtime to be rejected")
+		}
+		t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "")
+		t.Setenv("AWS_EXECUTION_ENVIRONMENT", "AWS_Lambda_go1.x")
+		if _, err := getApiEnvironment(); err == nil {
+			t.Fatal("expected LOCAL mode inside a Lambda runtime (AWS_EXECUTION_ENVIRONMENT) to be rejected")
+		}
+	})
 }

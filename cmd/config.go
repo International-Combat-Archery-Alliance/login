@@ -282,11 +282,24 @@ func parseEmailList(emailsStr string) []string {
 	return emails
 }
 
-func getApiEnvironment() api.Environment {
+func getApiEnvironment() (api.Environment, error) {
 	if isLocal() {
-		return api.LOCAL
+		// Fail closed: LOCAL mode installs ephemeral dev keys (machine keypair
+		// + static dev JWKS). AWS_SAM_LOCAL is set by `sam local`, never by
+		// the Lambda runtime, so this combination can only be a prod
+		// misconfig — refuse to boot with dev key material instead.
+		if insideLambdaRuntime() {
+			return 0, fmt.Errorf("AWS_SAM_LOCAL=true but running in an AWS Lambda runtime; refusing LOCAL mode")
+		}
+		return api.LOCAL, nil
 	}
-	return api.PROD
+	return api.PROD, nil
+}
+
+// insideLambdaRuntime reports whether the process is running in a real Lambda
+// execution environment (neither is set under `sam local start-api`).
+func insideLambdaRuntime() bool {
+	return os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" || os.Getenv("AWS_EXECUTION_ENVIRONMENT") != ""
 }
 
 func isLocal() bool {

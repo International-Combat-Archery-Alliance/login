@@ -72,7 +72,10 @@ func setupApi(logger *slog.Logger) (*api.API, func(context.Context) error, error
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	env := getApiEnvironment()
+	env, err := getApiEnvironment()
+	if err != nil {
+		return nil, func(context.Context) error { return nil }, fmt.Errorf("environment: %w", err)
+	}
 
 	// -----------------------------------------------------------------------
 	// Phase 1: New Relic license key → telemetry init (sequential dependency)
