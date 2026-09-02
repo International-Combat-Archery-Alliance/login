@@ -22,6 +22,10 @@ const (
 	// maxM2MSecretLen bounds the clientSecret before any crypto work (bcrypt
 	// only uses 72 bytes; capping avoids oversized-parse cost).
 	maxM2MSecretLen = 1024
+	// maxM2MClientIDLen bounds clientId: DynamoDB partition keys top out at
+	// 2048 bytes, and clientIds are short identifiers by construction. A value
+	// beyond the cap is rejected before any DDB access.
+	maxM2MClientIDLen = 64
 	// maxM2MBasicHeaderLen bounds the Authorization header we are willing to
 	// decode.
 	maxM2MBasicHeaderLen = 4096
@@ -179,7 +183,9 @@ func (a *API) recordM2MFailure(ctx context.Context, clientID string, now time.Ti
 }
 
 // parseBasicAuth extracts clientId:clientSecret from an HTTP Basic
-// Authorization header.
+// Authorization header. clientIds longer than maxM2MClientIDLen are rejected
+// up front so an attacker-controlled clientId can never reach DynamoDB
+// (partition keys > 2048 bytes fail with a ValidationException → 500).
 func parseBasicAuth(header string) (clientID string, clientSecret string, ok bool) {
 	if header == "" || len(header) > maxM2MBasicHeaderLen || !strings.HasPrefix(header, "Basic ") {
 		return "", "", false
@@ -196,7 +202,7 @@ func parseBasicAuth(header string) (clientID string, clientSecret string, ok boo
 	}
 
 	clientID, clientSecret, found := strings.Cut(val, ":")
-	if !found || clientID == "" || clientSecret == "" {
+	if !found || clientID == "" || clientSecret == "" || len(clientID) > maxM2MClientIDLen {
 		return "", "", false
 	}
 	return clientID, clientSecret, true

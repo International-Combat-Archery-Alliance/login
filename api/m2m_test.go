@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -269,6 +270,8 @@ func TestPostLoginV1M2mTokensBadCredentialsFormat(t *testing.T) {
 		{name: "missing colon", header: "Basic " + b64Std("justanid")},
 		{name: "empty secret", header: "Basic " + b64Std(testClientID+":")},
 		{name: "empty client", header: "Basic " + b64Std(":"+testSecret)},
+		{name: "oversized client id", header: "Basic " + b64Std(strings.Repeat("c", maxM2MClientIDLen+1)+":"+testSecret)},
+		{name: "oversized secret", header: "Basic " + b64Std(testClientID+":"+strings.Repeat("s", maxM2MSecretLen+1))},
 	}
 
 	for _, tt := range tests {
