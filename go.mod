@@ -5,7 +5,7 @@ go 1.25.0
 tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
 require (
-	github.com/International-Combat-Archery-Alliance/auth v0.3.1
+	github.com/International-Combat-Archery-Alliance/auth v0.4.0
 	github.com/International-Combat-Archery-Alliance/middleware v0.5.0
 	github.com/International-Combat-Archery-Alliance/telemetry v0.2.0
 	github.com/aws/aws-sdk-go-v2 v1.41.5
@@ -92,5 +92,3 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/International-Combat-Archery-Alliance/auth => ../auth
