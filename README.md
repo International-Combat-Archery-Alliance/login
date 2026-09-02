@@ -24,7 +24,7 @@ A secure authentication service for the International Combat Archery Alliance (I
 
 ### Prerequisites
 
-- Go 1.24+
+- Go 1.25+
 - AWS SAM CLI (for local development)
 - Docker (for containerized deployment)
 
@@ -66,7 +66,8 @@ make build
 `POST /login/v1/m2m-tokens` (client-credentials) and
 `GET /login/.well-known/jwks.json` implement service-to-service JWT auth.
 Only `login` ever holds the private signing key; every other service verifies
-with public keys fetched from the JWKS endpoint (last-known-good per instance).
+with public keys fetched from the JWKS endpoint (derived once at startup from
+the same keys the signer uses; rotation = SSM edit + redeploy).
 
 ### Manual SSM provisioning (rotation is a manual step)
 
@@ -87,8 +88,9 @@ publishes a rotated key set).
    ```
    Generate with: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048`
 
-2. **`/userJwtSigningKeys`** — same format, `user-*` namespaced kids; needed
-   once ADR-0007 lands.
+2. **`/userJwtSigningKeys`** — same format, `user-*` namespaced kids; reserved
+   for ADR-0007. Not yet read or served by login (JWKS currently serves
+   `machine-*` only); do not provision until ADR-0007 lands.
 
 3. **`/m2m/<clientId>/secret`** (SecureString) — the caller's client secret,
    **≥ 32 bytes CSPRNG** (e.g. `openssl rand -base64 48`). The caller role
@@ -109,8 +111,9 @@ publishes a rotated key set).
    }
    ```
    Hash the secret first: `htpasswd -bnBC 10 "" <secret> | tr -d ':\n'`
-   (`secretRounds` is an array: keep the previous round until all callers have
-   recycled, then remove it.)
+   (cost 10 must match the dummy-compare cost or clientId existence becomes
+   timing-distinguishable; `secretRounds` is an array: keep the previous round
+   until all callers have recycled, then remove it.)
 
 5. **Rate-limit records** (`RATE#<clientId>`) are created automatically by the
    endpoint; DynamoDB TTL cleans them up (`ttl` is already enabled on the

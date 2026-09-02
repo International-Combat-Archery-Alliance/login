@@ -125,7 +125,7 @@ paths:
           description: HTTP Basic credentials - base64(clientId:clientSecret).
           schema:
             type: string
-            minLength: 8
+            minLength: 10
       responses:
         '200':
           description: Machine token issued
@@ -162,7 +162,7 @@ paths:
       summary: Returns the JSON Web Key Set for ICAA token verification
       description: >
         Serves the RSA public keys (RFC 7517 JWK Set) used to verify ICAA JWTs,
-        keyed by kid (machine-* / user-* namespaces).
+        keyed by kid (currently machine-*; user-* reserved for ADR-0007).
       security: []
       responses:
         '200':
@@ -274,7 +274,7 @@ components:
             $ref: '#/components/schemas/JWK'
     JWK:
       type: object
-      description: RSA public key (RFC 7517), kid namespaced machine-* or user-*.
+      description: RSA public key (RFC 7517), kid namespaced machine-* (user-* reserved for ADR-0007).
       required:
         - kty
         - kid

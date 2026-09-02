@@ -17,7 +17,9 @@ import (
 
 const (
 	// m2mBcryptCost is the bcrypt cost for client-secret hashes so the CPU
-	// budget per attempt is known.
+	// budget per attempt is known. Provisioned rounds must also use cost 10:
+	// the unknown-client dummy compare below runs at this cost, so a cost-12
+	// round would make known vs unknown clientIds timing-distinguishable.
 	m2mBcryptCost = 10
 	// maxM2MSecretLen bounds the clientSecret before any crypto work (bcrypt
 	// only uses 72 bytes; capping avoids oversized-parse cost).
@@ -166,6 +168,8 @@ func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTo
 	}
 
 	logger.Info("m2m token issued", slog.String("clientId", clientID))
+	// expires_in must stay in sync with the signer lifetime: main.go never
+	// overrides WithMachineTokenLifetime, so the default is authoritative.
 	return PostLoginV1M2mTokens200JSONResponse{
 		AccessToken: signed,
 		TokenType:   "Bearer",

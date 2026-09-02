@@ -77,7 +77,7 @@ Resources:
               Resource:
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/jwtSigningKeys"
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/machineJwtSigningKeys"
-                - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/userJwtSigningKeys"
+                # /userJwtSigningKeys reserved for ADR-0007; login does not read it yet.
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/adminEmails"
                 - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/newrelic-license-key"
       Events:

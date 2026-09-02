@@ -273,8 +273,9 @@ func (s *M2MStore) RecordFailure(ctx context.Context, clientID string, now time.
 
 // ResetFailures clears failures + lockout after a successful exchange. The
 // rate-limit counter (windowCount) is intentionally left untouched: the limit
-// applies per window regardless of success. ttl is refreshed to the current
-// window end — with no lock left, TTL cleanup at the window boundary is fine.
+// applies per window regardless of success. ttl is set to now+windowDuration
+// (always >= the current windowEnd, so the item survives to its window
+// boundary); with no lock left, TTL cleanup after that is fine.
 func (s *M2MStore) ResetFailures(ctx context.Context, clientID string, now time.Time) error {
 	windowEnd := now.Add(s.windowDuration)
 

@@ -165,6 +165,8 @@ func setupApi(logger *slog.Logger) (*api.API, func(context.Context) error, error
 	)
 
 	machineTokenSigner, err := token.NewMachineTokenSigner(cfg.MachineSigningKeys, cfg.MachineCurrentKeyID)
+	// NOTE: default 5-minute lifetime is authoritative for expires_in in
+	// api/m2m.go. Do not pass WithMachineTokenLifetime without updating it.
 	if err != nil {
 		startupSpan.RecordError(err)
 		startupSpan.End()

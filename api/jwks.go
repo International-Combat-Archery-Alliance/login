@@ -8,7 +8,7 @@ import (
 )
 
 // JWKSProvider serves the public key set used to verify ICAA JWTs. login
-// derives it from its own signing-key SSM parameters at request time.
+// derives it once at startup from the same signing keys the signer uses.
 type JWKSProvider interface {
 	PublicJWKS(ctx context.Context) (JWKS, error)
 }
