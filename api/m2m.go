@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	// m2mBcryptCost is the documented bcrypt cost for client-secret hashes
-	// (ADR-0006: 10-12) so the CPU budget per attempt is known.
+	// m2mBcryptCost is the bcrypt cost for client-secret hashes so the CPU
+	// budget per attempt is known.
 	m2mBcryptCost = 10
 	// maxM2MSecretLen bounds the clientSecret before any crypto work (bcrypt
 	// only uses 72 bytes; capping avoids oversized-parse cost).
@@ -26,14 +26,13 @@ const (
 	// decode.
 	maxM2MBasicHeaderLen = 4096
 
-	// JWKS cache headers (ADR-0006/0007): edge-cacheable for 5 minutes,
-	// stale-while-revalidate 1 hour. The SSM floor, not this header, is the
-	// availability mechanism.
+	// JWKS cache headers: edge-cacheable for 5 minutes, stale-while-revalidate
+	// 1 hour.
 	jwksCacheControl = "public, max-age=300, stale-while-revalidate=3600"
 )
 
 // M2MStore provides machine-credential lookup plus the fixed-window limiter
-// and lockout used by the m2m token exchange (ADR-0006 hardening).
+// and lockout used by the m2m token exchange.
 type M2MStore interface {
 	GetClient(ctx context.Context, clientID string) (*dynamo.MachineClientItem, error)
 	BumpWindow(ctx context.Context, clientID string, now time.Time) (*dynamo.RateWindow, error)
@@ -42,10 +41,10 @@ type M2MStore interface {
 	WindowLimit() int64
 }
 
-// PostLoginV1M2mTokens is the client-credentials exchange (ADR-0006).
+// PostLoginV1M2mTokens is the client-credentials exchange.
 //
-// Flow (per the m2m endpoint hardening section):
-//  1. DDB RATE# fixed-window + lockout — BEFORE bcrypt, so failed attempts
+// Flow:
+//  1. Fixed-window limiter + lockout — before bcrypt, so failed attempts
 //     never burn Lambda CPU.
 //  2. bcrypt verify of the client secret (constant-time), with a dummy
 //     compare so unknown clientIds are not a timing oracle.
@@ -75,7 +74,7 @@ func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTo
 
 	now := time.Now()
 
-	// Layer 2 (ADR-0006): DDB RATE# fixed-window limiter + lockout.
+	// Fixed-window limiter + lockout, before bcrypt.
 	window, err := a.m2mStore.BumpWindow(ctx, clientID, now)
 	if err != nil {
 		span.RecordError(err)
@@ -104,7 +103,7 @@ func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTo
 
 	// Client verification: bcrypt + constant-time compare. Unknown/inactive
 	// clients short-circuit with a dummy compare so clientId existence is not
-	// a timing oracle (ADR-0006 appendix).
+	// a timing oracle.
 	client, err := a.m2mStore.GetClient(ctx, clientID)
 	if err != nil {
 		span.RecordError(err)

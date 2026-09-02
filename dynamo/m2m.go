@@ -15,14 +15,14 @@ import (
 
 const (
 	// MachineClientPrefix prefixes PK/SK of machine-credential records
-	// (bcrypt secretRounds[], allowed audience + scopes). ADR-0006.
+	// (bcrypt secretRounds[], allowed audience + scopes).
 	MachineClientPrefix = "CLIENT#"
 	// RatePrefix prefixes PK/SK of the m2m fixed-window rate-limit/lockout
-	// items. ADR-0006 (m2m endpoint hardening, Layer 2).
+	// items.
 	RatePrefix = "RATE#"
 )
 
-// M2M limiter defaults (ADR-0006 §m2m endpoint hardening).
+// M2M limiter defaults.
 const (
 	DefaultM2MWindowLimit      = 30          // requests per window per clientId
 	DefaultM2MWindowDuration   = time.Minute // fixed window
@@ -32,7 +32,7 @@ const (
 
 // MachineClientItem is the CLIENT#<clientId> record in the login-api table.
 // secretRounds is an array so rotation keeps a grace window: keep the previous
-// round until all callers have recycled, then drop it (ADR-0006 appendix).
+// round until all callers have recycled, then drop it.
 type MachineClientItem struct {
 	PK           string    `dynamodbav:"PK"`
 	SK           string    `dynamodbav:"SK"`
@@ -64,9 +64,9 @@ type rateItem struct {
 
 // M2MStore provides the machine-credential record (CLIENT#) and the m2m
 // fixed-window limiter + lockout (RATE#) in the login-api table.
-// The limiter runs BEFORE bcrypt so failed attempts never burn Lambda CPU
-// (ADR-0006). A window's ttl is the end of the 60s window; a locked window's
-// ttl spans the lockout so DynamoDB TTL cleans stale items.
+// The limiter runs before bcrypt so failed attempts never burn Lambda CPU.
+// Window items carry a ttl; locked items' ttl spans the lockout so DynamoDB
+// TTL cleans stale items.
 type M2MStore struct {
 	client           *dynamodb.Client
 	tableName        string

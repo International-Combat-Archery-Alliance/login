@@ -195,8 +195,6 @@ type rsaJWTKeysData struct {
 
 // parseRSAJWTSigningKeysJSON parses a keypair parameter of the form
 // {"currentKey": "<kid>", "keys": {"<kid>": "<PEM PKCS#8 RSA private key>"}}.
-// This is the format for /machineJwtSigningKeys (and later /userJwtSigningKeys,
-// ADR-0007).
 func parseRSAJWTSigningKeysJSON(raw string) (map[string]*rsa.PrivateKey, string, error) {
 	var data rsaJWTKeysData
 	if err := json.Unmarshal([]byte(raw), &data); err != nil {

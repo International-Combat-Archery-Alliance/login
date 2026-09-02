@@ -196,7 +196,7 @@ func TestPostLoginV1M2mTokensInactiveClient(t *testing.T) {
 
 func TestPostLoginV1M2mTokensRotationGraceWindow(t *testing.T) {
 	// Old round + new round in secretRounds[]: both must be accepted until the
-	// old round is removed (ADR-0006 appendix: rotation grace).
+	// old round is removed (rotation grace).
 	hash, _ := bcrypt.GenerateFromPassword([]byte("old-secret-value"), m2mBcryptCost)
 	client := testClientItem(testSecret)
 	client.SecretRounds = []string{string(hash), client.SecretRounds[0]}
@@ -308,6 +308,7 @@ func TestPostLoginV1M2mTokensRecordFailureErrorStill401(t *testing.T) {
 func validateWithTestCache(t *testing.T, priv *rsa.PrivateKey, tokenString, audience, scope string) (*token.MachineTokenClaims, error) {
 	t.Helper()
 	cache := token.NewKeyCache("",
+		token.WithLocalMode(),
 		token.WithDevKeys(map[string]*rsa.PublicKey{"machine-test": &priv.PublicKey}),
 	)
 	return cache.ValidateMachineToken(context.Background(), tokenString, audience, scope)

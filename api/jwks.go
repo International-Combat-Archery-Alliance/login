@@ -8,15 +8,13 @@ import (
 )
 
 // JWKSProvider serves the public key set used to verify ICAA JWTs. login
-// derives it from its own signing-key SSM parameters (the same rotation step
-// that publishes the /jwtPublicKeys floor, ADR-0006/0007).
+// derives it from its own signing-key SSM parameters at request time.
 type JWKSProvider interface {
 	PublicJWKS(ctx context.Context) (JWKS, error)
 }
 
 // GetLoginWellKnownJwksJson serves GET /login/.well-known/jwks.json
-// (security: []) with the ADR-mandated cache headers. The SSM /jwtPublicKeys
-// floor — not edge caching — is the load-bearing availability mechanism.
+// (security: []) with long-lived cache headers.
 func (a *API) GetLoginWellKnownJwksJson(ctx context.Context, request GetLoginWellKnownJwksJsonRequestObject) (GetLoginWellKnownJwksJsonResponseObject, error) {
 	ctx, span := a.tracer.Start(ctx, "GetLoginWellKnownJwksJson")
 	defer span.End()

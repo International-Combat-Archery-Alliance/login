@@ -66,8 +66,7 @@ make build
 `POST /login/v1/m2m-tokens` (client-credentials) and
 `GET /login/.well-known/jwks.json` implement service-to-service JWT auth.
 Only `login` ever holds the private signing key; every other service verifies
-with public keys fetched from the JWKS endpoint (last-known-good per instance —
-no SSM public-key floor; project decision, see `auth/token/keycache.go`).
+with public keys fetched from the JWKS endpoint (last-known-good per instance).
 
 ### Manual SSM provisioning (rotation is a manual step)
 

@@ -52,8 +52,7 @@ type API struct {
 	jwksProvider         JWKSProvider
 	adminEmails          map[string]bool
 	flushTraces          func(context.Context) error
-	// dummyClientSecretHash equalizes the unknown-client bcrypt timing path
-	// (ADR-0006 appendix).
+	// dummyClientSecretHash equalizes the unknown-client bcrypt timing path.
 	dummyClientSecretHash []byte
 }
 

@@ -17,9 +17,8 @@ import (
 
 // ssmJWKSProvider serves the public JWKS by deriving it from login's own
 // signing-key SSM parameters (/machineJwtSigningKeys, and /userJwtSigningKeys
-// once ADR-0007 lands). Rotation is a manual SSM write, so the provider
-// re-reads with a short TTL and keeps last-known-good on failure — the JWKS
-// endpoint can never serve a half-rotated or stale-empty key set.
+// when provisioned). Rotation is a manual SSM write, so the provider
+// re-reads with a short TTL and keeps last-known-good on failure.
 type ssmJWKSProvider struct {
 	ssm      *ssm.Client
 	params   []string
@@ -30,9 +29,8 @@ type ssmJWKSProvider struct {
 	cachedAt time.Time
 }
 
-// newSSMJWKSProvider builds the provider. /userJwtSigningKeys is included
-// once it exists; a missing parameter yields an empty key set, not an error
-// (ADR-0007 services the user-* namespace on the same endpoint).
+// newSSMJWKSProvider builds the provider. A missing parameter yields an empty
+// key set, not an error (user-* keys are served on the same endpoint).
 func newSSMJWKSProvider(ctx context.Context, logger *slog.Logger) (*ssmJWKSProvider, error) {
 	cfg, err := loadAWSConfig(ctx)
 	if err != nil {
@@ -78,7 +76,7 @@ func (p *ssmJWKSProvider) PublicJWKS(ctx context.Context) (api.JWKS, error) {
 	// Order is deterministic: machine keys first, then user keys.
 	for _, paramName := range p.params {
 		if invalid[paramName] {
-			// Not provisioned yet (e.g. /userJwtSigningKeys before ADR-0007).
+			// Not provisioned yet.
 			continue
 		}
 		raw := ""
