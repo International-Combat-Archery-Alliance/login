@@ -171,19 +171,9 @@ func setupApi(logger *slog.Logger) (*api.API, func(context.Context) error, error
 	refreshTokenStore := dynamo.NewDynamoDBRefreshTokenStore(db, dynamoDBTableName)
 	m2mStore := dynamo.NewM2MStore(db, dynamoDBTableName)
 
-	// JWKS serving: prod derives public keys from the signing-key SSM params
-	// (TTL-cached, last-known-good); local serves the dev keypair directly.
-	var jwksProvider api.JWKSProvider
-	if env == api.LOCAL {
-		jwksProvider = staticJWKSProvider{jwks: keypairJWKS(cfg.MachineSigningKeys)}
-	} else {
-		jwksProvider, err = newSSMJWKSProvider(ctx, logger)
-		if err != nil {
-			startupSpan.RecordError(err)
-			startupSpan.End()
-			return nil, traceShutdown, fmt.Errorf("jwks provider: %w", err)
-		}
-	}
+	// JWKS serving: the public key set is derived once at startup from the
+	// same signing keys the signer uses. Rotation = SSM edit + redeploy.
+	jwksProvider := staticJWKSProvider{jwks: keypairJWKS(cfg.MachineSigningKeys)}
 
 	loginAPI := api.NewAPI(api.Config{
 		GoogleTokenValidator: googleTokenValidator,

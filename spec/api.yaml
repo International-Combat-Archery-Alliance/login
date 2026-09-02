@@ -161,9 +161,8 @@ paths:
     get:
       summary: Returns the JSON Web Key Set for ICAA token verification
       description: >
-        Serves the public keys (RSA, kid namespaces machine-* / user-*) used to
-        verify ICAA JWTs. The same key material is mirrored to the /jwtPublicKeys
-        SSM parameter (the availability floor) in the same rotation step.
+        Serves the RSA public keys (RFC 7517 JWK Set) used to verify ICAA JWTs,
+        keyed by kid (machine-* / user-* namespaces).
       security: []
       responses:
         '200':
@@ -265,7 +264,7 @@ components:
           example: 300
     JWKS:
       type: object
-      description: JSON Web Key Set served by login and mirrored to /jwtPublicKeys SSM.
+      description: JSON Web Key Set (RFC 7517) of ICAA token verification keys.
       required:
         - keys
       properties:

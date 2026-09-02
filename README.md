@@ -71,8 +71,9 @@ with public keys fetched from the JWKS endpoint (last-known-good per instance).
 ### Manual SSM provisioning (rotation is a manual step)
 
 Secrets and keypairs are provisioned by hand — login itself has no SSM write
-permissions (rotation = edit the params below, then roll the caller, per the
-ADR-0006 rotation runbook).
+permissions (rotation = edit the params below, then **redeploy login**: the
+signer and the JWKS endpoint both load keys at startup, so the deploy is what
+publishes a rotated key set).
 
 1. **`/machineJwtSigningKeys`** (SecureString, Advanced tier — a Standard
    parameter caps at 4 KB and two RSA-2048 keys already exceed it):
