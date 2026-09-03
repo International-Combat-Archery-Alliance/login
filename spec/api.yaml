@@ -68,9 +68,10 @@ paths:
                 $ref: '#/components/schemas/Error'
     delete:
       summary: Logs the user out
-      description: For cookie based auth, deletes the cookies and revokes the refresh token, effectively logging the user out.
+      description: Deletes the cookies and revokes the refresh token when its cookie is presented, effectively logging the user out.
       security:
         - icaaCookieAuth: []
+        - icaaRefreshCookieAuth: []
       responses:
         '200':
           description: User logged out
@@ -162,7 +163,7 @@ paths:
       summary: Returns the JSON Web Key Set for ICAA token verification
       description: >
         Serves the RSA public keys (RFC 7517 JWK Set) used to verify ICAA JWTs,
-        keyed by kid (currently machine-*; user-* reserved for ADR-0007).
+        keyed by kid (machine-* for service tokens, user-* for user tokens).
       security: []
       responses:
         '200':
@@ -274,7 +275,7 @@ components:
             $ref: '#/components/schemas/JWK'
     JWK:
       type: object
-      description: RSA public key (RFC 7517), kid namespaced machine-* (user-* reserved for ADR-0007).
+      description: RSA public key (RFC 7517), kid namespaced machine-* (service tokens) or user-* (user tokens).
       required:
         - kty
         - kid

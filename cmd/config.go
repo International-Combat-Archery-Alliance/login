@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
@@ -100,8 +99,12 @@ func getSSMParameters(ctx context.Context, names []string) (map[string]string, e
 }
 
 type AppConfig struct {
-	JWTSigningKeys      map[string]token.SigningKey
-	JWTCurrentKeyID     string
+	// UserSigningKeys holds the RS256 user-token private keys (login-only).
+	// SSM shape reuses the machine format:
+	// {"currentKey": "<kid>", "keys": {"<kid>": "<PEM PKCS#8 RSA private key>"}}.
+	// Kids must use the user-* namespace.
+	UserSigningKeys     map[string]*rsa.PrivateKey
+	UserCurrentKeyID    string
 	MachineSigningKeys  map[string]*rsa.PrivateKey
 	MachineCurrentKeyID string
 	AdminEmails         []string
@@ -115,25 +118,22 @@ func fetchAppConfig(ctx context.Context, env api.Environment) (*AppConfig, error
 }
 
 func localAppConfig() (*AppConfig, error) {
-	key := os.Getenv("JWT_SIGNING_KEY")
-	if key == "" {
-		key = "local-development-signing-key-minimum-32-characters-long"
-	}
-
 	emailsStr := os.Getenv("ADMIN_EMAILS")
 
-	// LOCAL dev keypair for machine tokens: generated ephemeral, explicit
+	// LOCAL dev keypairs (user + machine): generated ephemeral, explicit
 	// LOCAL env flag (AWS_SAM_LOCAL), never inferred from hostname.
+	userPriv, _, err := token.GenerateUserDevKeypair()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate local user dev keypair: %w", err)
+	}
 	machinePriv, _, err := token.GenerateMachineDevKeypair()
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate local machine dev keypair: %w", err)
 	}
 
 	return &AppConfig{
-		JWTSigningKeys: map[string]token.SigningKey{
-			"local": {ID: "local", Key: []byte(key)},
-		},
-		JWTCurrentKeyID:     "local",
+		UserSigningKeys:     map[string]*rsa.PrivateKey{"user-local": userPriv},
+		UserCurrentKeyID:    "user-local",
 		MachineSigningKeys:  map[string]*rsa.PrivateKey{"machine-local": machinePriv},
 		MachineCurrentKeyID: "machine-local",
 		AdminEmails:         parseEmailList(emailsStr),
@@ -142,7 +142,7 @@ func localAppConfig() (*AppConfig, error) {
 
 func fetchProdAppConfig(ctx context.Context) (*AppConfig, error) {
 	ssmNames := []string{
-		"/jwtSigningKeys",
+		"/userJwtSigningKeys",
 		"/machineJwtSigningKeys",
 		"/adminEmails",
 	}
@@ -154,15 +154,15 @@ func fetchProdAppConfig(ctx context.Context) (*AppConfig, error) {
 
 	cfg := &AppConfig{}
 
-	if v, ok := params["/jwtSigningKeys"]; ok {
-		signingKeys, currentKeyID, err := parseJWTSigningKeysJSON(v)
+	if v, ok := params["/userJwtSigningKeys"]; ok {
+		userKeys, currentKeyID, err := parseRSAJWTSigningKeysJSON(v)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse JWT signing keys: %w", err)
+			return nil, fmt.Errorf("failed to parse user JWT signing keys: %w", err)
 		}
-		cfg.JWTSigningKeys = signingKeys
-		cfg.JWTCurrentKeyID = currentKeyID
+		cfg.UserSigningKeys = userKeys
+		cfg.UserCurrentKeyID = currentKeyID
 	} else {
-		return nil, fmt.Errorf("missing SSM parameter: /jwtSigningKeys")
+		return nil, fmt.Errorf("missing SSM parameter: /userJwtSigningKeys")
 	}
 
 	if v, ok := params["/machineJwtSigningKeys"]; ok {
@@ -181,11 +181,6 @@ func fetchProdAppConfig(ctx context.Context) (*AppConfig, error) {
 	}
 
 	return cfg, nil
-}
-
-type jwtSigningKeysData struct {
-	CurrentKey string            `json:"currentKey"`
-	Keys       map[string]string `json:"keys"`
 }
 
 type rsaJWTKeysData struct {
@@ -236,31 +231,6 @@ func parseRSAPrivateKeyPEM(keyPEM string) (*rsa.PrivateKey, error) {
 	}
 
 	return nil, fmt.Errorf("unrecognized private key format")
-}
-
-func parseJWTSigningKeysJSON(raw string) (map[string]token.SigningKey, string, error) {
-	var data jwtSigningKeysData
-	if err := json.Unmarshal([]byte(raw), &data); err != nil {
-		return nil, "", fmt.Errorf("failed to parse JWT signing keys JSON: %w", err)
-	}
-
-	signingKeys := make(map[string]token.SigningKey)
-	for keyID, keyValue := range data.Keys {
-		decodedKey, err := base64.StdEncoding.DecodeString(keyValue)
-		if err != nil {
-			return nil, "", fmt.Errorf("failed to decode base64 key %q: %w", keyID, err)
-		}
-		signingKeys[keyID] = token.SigningKey{
-			ID:  keyID,
-			Key: decodedKey,
-		}
-	}
-
-	if _, ok := signingKeys[data.CurrentKey]; !ok {
-		return nil, "", fmt.Errorf("current key ID %q not found in keys", data.CurrentKey)
-	}
-
-	return signingKeys, data.CurrentKey, nil
 }
 
 func getNewRelicLicenseKey(ctx context.Context, env api.Environment) (string, error) {
