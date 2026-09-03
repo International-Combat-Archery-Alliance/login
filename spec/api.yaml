@@ -117,8 +117,8 @@ paths:
         (Authorization: Basic base64(clientId:clientSecret)) and requests a
         token for one of its provisioned audiences. On success a 5-minute
         RS256 machine JWT is returned, bound to that audience with the exact
-        scopes provisioned for it. Internet-facing and rate limited
-        (DynamoDB fixed-window counter); 429 is returned when throttled.
+        scopes provisioned for it. Internet-facing and rate limited;
+        429 is returned when throttled.
       security: []
       parameters:
         - name: Authorization
