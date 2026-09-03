@@ -38,3 +38,10 @@ func (a *API) PostLoginV1M2mClientsClientIdRotate(ctx context.Context, request P
 		Code:    InternalError,
 	}, nil
 }
+
+func (a *API) PatchLoginV1M2mClientsClientId(ctx context.Context, request PatchLoginV1M2mClientsClientIdRequestObject) (PatchLoginV1M2mClientsClientIdResponseObject, error) {
+	return PatchLoginV1M2mClientsClientId500JSONResponse{
+		Message: "not implemented",
+		Code:    InternalError,
+	}, nil
+}
