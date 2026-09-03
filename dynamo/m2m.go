@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/International-Combat-Archery-Alliance/login/m2m"
@@ -20,6 +21,11 @@ const (
 	MachineClientPrefix = "CLIENT#"
 	// RatePrefix prefixes PK/SK of the m2m fixed-window rate-limit items.
 	RatePrefix = "RATE#"
+	// M2MClientsIndex is the GSI backing the admin list (no table scan).
+	M2MClientsIndex = "GSI1"
+	// M2MClientsPartition is the constant GSI1PK shared by every CLIENT#
+	// record; GSI1SK (CLIENT#<clientId>) orders the list by clientId.
+	M2MClientsPartition = "M2M_CLIENTS"
 )
 
 // M2M limiter defaults.
@@ -30,18 +36,21 @@ const (
 
 // MachineClientItem is the CLIENT#<clientId> persistence record. Mapped to
 // m2m.Client on read; rotation keeps prior rounds until callers recycle.
+// GSI1PK/GSI1SK back the admin list query (constant partition, id-ordered).
 type MachineClientItem struct {
-	PK           string    `dynamodbav:"PK"`
-	SK           string    `dynamodbav:"SK"`
-	SecretRounds []string  `dynamodbav:"secretRounds"`
-	Audience     string    `dynamodbav:"audience"`
-	Scopes       []string  `dynamodbav:"scopes"`
-	Active       bool      `dynamodbav:"active"`
-	CreatedAt    time.Time `dynamodbav:"createdAt"`
-	UpdatedAt    time.Time `dynamodbav:"updatedAt"`
+	PK           string              `dynamodbav:"PK"`
+	SK           string              `dynamodbav:"SK"`
+	SecretRounds []string            `dynamodbav:"secretRounds"`
+	Audiences    map[string][]string `dynamodbav:"audiences"`
+	Active       bool                `dynamodbav:"active"`
+	CreatedAt    time.Time           `dynamodbav:"createdAt"`
+	UpdatedAt    time.Time           `dynamodbav:"updatedAt"`
+	GSI1PK       string              `dynamodbav:"GSI1PK"`
+	GSI1SK       string              `dynamodbav:"GSI1SK"`
 }
 
 var _ m2m.Store = (*M2MStore)(nil)
+var _ m2m.ProvisionStore = (*M2MStore)(nil)
 
 // rateItem mirrors the RATE# item attributes for SDK unmarshalling. windowEnd
 // is stored as a Unix epoch (number) so DynamoDB conditions can compare it
@@ -116,13 +125,7 @@ func (s *M2MStore) GetClient(ctx context.Context, clientID string) (*m2m.Client,
 	if err := attributevalue.UnmarshalMap(result.Item, &item); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal machine client %q: %w", clientID, err)
 	}
-	return &m2m.Client{
-		ID:           clientID,
-		SecretRounds: item.SecretRounds,
-		Audience:     item.Audience,
-		Scopes:       item.Scopes,
-		Active:       item.Active,
-	}, nil
+	return machineClientFromItem(clientID, item), nil
 }
 
 // BumpWindow increments windowCount for the current fixed window and returns
@@ -199,6 +202,164 @@ func machineClientKey(clientID string) map[string]types.AttributeValue {
 	return map[string]types.AttributeValue{
 		"PK": &types.AttributeValueMemberS{Value: id},
 		"SK": &types.AttributeValueMemberS{Value: id},
+	}
+}
+
+// CreateClient writes a CLIENT#<clientId> record. The condition makes the
+// verdict exact: an existing id (including revoked records) surfaces as
+// m2m.ErrClientExists.
+func (s *M2MStore) CreateClient(ctx context.Context, client *m2m.Client) error {
+	now := s.clock.Now()
+	item := MachineClientItem{
+		PK:           MachineClientPrefix + client.ID,
+		SK:           MachineClientPrefix + client.ID,
+		SecretRounds: client.SecretRounds,
+		Audiences:    client.Audiences,
+		Active:       client.Active,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		GSI1PK:       M2MClientsPartition,
+		GSI1SK:       MachineClientPrefix + client.ID,
+	}
+	av, err := attributevalue.MarshalMap(item)
+	if err != nil {
+		return fmt.Errorf("failed to marshal machine client %q: %w", client.ID, err)
+	}
+
+	_, err = s.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName:           aws.String(s.tableName),
+		Item:                av,
+		ConditionExpression: aws.String("attribute_not_exists(PK)"),
+	})
+	if err != nil {
+		var condErr *types.ConditionalCheckFailedException
+		if errors.As(err, &condErr) {
+			return fmt.Errorf("machine client %q already exists: %w", client.ID, m2m.ErrClientExists)
+		}
+		return fmt.Errorf("failed to put machine client %q: %w", client.ID, err)
+	}
+	return nil
+}
+
+// ListClients returns every CLIENT# record via the GSI (no scan), ordered by
+// clientId. Secrets are never exposed — callers only receive metadata, and
+// the item holds hashes, never plaintext.
+func (s *M2MStore) ListClients(ctx context.Context) ([]*m2m.Client, error) {
+	var clients []*m2m.Client
+	var startKey map[string]types.AttributeValue
+
+	for {
+		out, err := s.client.Query(ctx, &dynamodb.QueryInput{
+			TableName:              aws.String(s.tableName),
+			IndexName:              aws.String(M2MClientsIndex),
+			KeyConditionExpression: aws.String("GSI1PK = :pk"),
+			ExpressionAttributeValues: map[string]types.AttributeValue{
+				":pk": &types.AttributeValueMemberS{Value: M2MClientsPartition},
+			},
+			ExclusiveStartKey: startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to list machine clients: %w", err)
+		}
+
+		var items []MachineClientItem
+		if err := attributevalue.UnmarshalListOfMaps(out.Items, &items); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal machine clients: %w", err)
+		}
+		for _, item := range items {
+			clients = append(clients, machineClientFromItem(strings.TrimPrefix(item.PK, MachineClientPrefix), item))
+		}
+
+		if out.LastEvaluatedKey == nil {
+			break
+		}
+		startKey = out.LastEvaluatedKey
+	}
+	return clients, nil
+}
+
+// DeactivateClient marks the record inactive (revoke). Caller-side secret
+// storage is never touched — removing the caller's copy is an operator step.
+// Idempotent: an already-inactive record succeeds.
+// A missing id surfaces as m2m.ErrClientNotFound.
+func (s *M2MStore) DeactivateClient(ctx context.Context, clientID string) (*m2m.Client, error) {
+	out, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:           aws.String(s.tableName),
+		Key:                 machineClientKey(clientID),
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+		UpdateExpression:    aws.String("SET active = :false, updatedAt = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":false": &types.AttributeValueMemberBOOL{Value: false},
+			":now":   &types.AttributeValueMemberS{Value: s.clock.Now().UTC().Format(time.RFC3339)},
+		},
+		ReturnValues: types.ReturnValueAllNew,
+	})
+	if err != nil {
+		var condErr *types.ConditionalCheckFailedException
+		if errors.As(err, &condErr) {
+			return nil, fmt.Errorf("machine client %q not found: %w", clientID, m2m.ErrClientNotFound)
+		}
+		return nil, fmt.Errorf("failed to deactivate machine client %q: %w", clientID, err)
+	}
+
+	var item MachineClientItem
+	if err := attributevalue.UnmarshalMap(out.Attributes, &item); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal machine client %q: %w", clientID, err)
+	}
+	return machineClientFromItem(clientID, item), nil
+}
+
+// UpdateRounds swaps secretRounds[] only when it still equals expected
+// (optimistic locking — a concurrent rotation surfaces as
+// m2m.ErrRoundsConflict instead of silently dropping a round). A missing id
+// surfaces as m2m.ErrClientNotFound.
+func (s *M2MStore) UpdateRounds(ctx context.Context, clientID string, expected, next []string) error {
+	expectedAV, err := attributevalue.MarshalList(expected)
+	if err != nil {
+		return fmt.Errorf("failed to marshal expected rounds for %q: %w", clientID, err)
+	}
+	nextAV, err := attributevalue.MarshalList(next)
+	if err != nil {
+		return fmt.Errorf("failed to marshal next rounds for %q: %w", clientID, err)
+	}
+
+	_, err = s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:           aws.String(s.tableName),
+		Key:                 machineClientKey(clientID),
+		ConditionExpression: aws.String("attribute_exists(PK) AND secretRounds = :expected"),
+		UpdateExpression:    aws.String("SET secretRounds = :next, updatedAt = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":expected": &types.AttributeValueMemberL{Value: expectedAV},
+			":next":     &types.AttributeValueMemberL{Value: nextAV},
+			":now":      &types.AttributeValueMemberS{Value: s.clock.Now().UTC().Format(time.RFC3339)},
+		},
+	})
+	if err == nil {
+		return nil
+	}
+	var condErr *types.ConditionalCheckFailedException
+	if !errors.As(err, &condErr) {
+		return fmt.Errorf("failed to rotate machine client %q: %w", clientID, err)
+	}
+
+	// The condition conflates "missing" with "concurrently modified": one read
+	// on the conflict path tells them apart.
+	current, getErr := s.GetClient(ctx, clientID)
+	if getErr != nil {
+		return fmt.Errorf("failed to re-read machine client %q after conflict: %w", clientID, getErr)
+	}
+	if current == nil {
+		return fmt.Errorf("machine client %q not found: %w", clientID, m2m.ErrClientNotFound)
+	}
+	return fmt.Errorf("machine client %q changed concurrently: %w", clientID, m2m.ErrRoundsConflict)
+}
+
+func machineClientFromItem(clientID string, item MachineClientItem) *m2m.Client {
+	return &m2m.Client{
+		ID:           clientID,
+		SecretRounds: item.SecretRounds,
+		Audiences:    item.Audiences,
+		Active:       item.Active,
 	}
 }
 

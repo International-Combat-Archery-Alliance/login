@@ -83,7 +83,7 @@ func ValidateAudiences(audiences map[string][]string) error {
 }
 
 // GenerateClientSecret returns base64url(32 CSPRNG bytes) — 43 chars, shown
-// to the admin exactly once and never persisted in plaintext outside SSM.
+// to the admin exactly once and never persisted in plaintext anywhere.
 func GenerateClientSecret() (string, error) {
 	raw := make([]byte, ClientSecretBytes)
 	if _, err := rand.Read(raw); err != nil {

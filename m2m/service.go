@@ -21,10 +21,12 @@ const (
 
 // Domain entities (persistence-agnostic).
 type Client struct {
-	ID           string
+	ID string
+	// Audiences maps each provisioned audience to its exact scopes. Empty
+	// (or missing an entry) authorizes nowhere: tokens are minted per
+	// requested audience with only that entry's scopes.
 	SecretRounds []string
-	Audience     string
-	Scopes       []string
+	Audiences    map[string][]string
 	Active       bool
 }
 
@@ -36,6 +38,7 @@ type RateWindow struct {
 var (
 	ErrInvalidCredentials = errors.New("invalid client credentials")
 	ErrRateLimited        = errors.New("rate limit exceeded")
+	ErrAudienceNotAllowed = errors.New("audience not provisioned for client")
 )
 
 // Ports (implemented by adapters).
@@ -81,8 +84,12 @@ func (s *Service) Lifetime() time.Duration {
 	return s.lifetime
 }
 
-// Exchange authenticates clientID:secret and mints a machine token.
-func (s *Service) Exchange(ctx context.Context, clientID, secret string, logger *slog.Logger) (signed string, err error) {
+// Exchange authenticates clientID:secret and mints a machine token bound to
+// the requested audience with that entry's exact scopes. Unknown/inactive
+// clients fail closed before any crypto work; an audience outside the
+// client's provisioned map fails closed as invalid_client (uniform 401, so
+// the provisioned set is never oracle-able through this endpoint).
+func (s *Service) Exchange(ctx context.Context, clientID, secret, audience string, logger *slog.Logger) (signed string, err error) {
 	client, err := s.store.GetClient(ctx, clientID)
 	if err != nil {
 		return "", fmt.Errorf("get machine client: %w", err)
@@ -103,17 +110,23 @@ func (s *Service) Exchange(ctx context.Context, clientID, secret string, logger 
 		return "", ErrRateLimited
 	}
 
+	scopes, ok := client.Audiences[audience]
+	if !ok {
+		logger.Warn("m2m invalid_client", slog.String("clientId", clientID))
+		return "", ErrAudienceNotAllowed
+	}
+
 	if !VerifySecret(client.SecretRounds, secret) {
 		logger.Warn("m2m invalid_client", slog.String("clientId", clientID))
 		return "", ErrInvalidCredentials
 	}
 
-	signed, err = s.signer.Sign(clientID, client.Audience, client.Scopes)
+	signed, err = s.signer.Sign(clientID, audience, scopes)
 	if err != nil {
 		return "", fmt.Errorf("sign machine token: %w", err)
 	}
 
-	logger.Info("m2m token issued", slog.String("clientId", clientID))
+	logger.Info("m2m token issued", slog.String("clientId", clientID), slog.String("audience", audience))
 	return signed, nil
 }
 

@@ -44,11 +44,25 @@ Resources:
           AttributeType: S
         - AttributeName: SK
           AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
       KeySchema:
         - AttributeName: PK
           KeyType: HASH
         - AttributeName: SK
           KeyType: RANGE
+      GlobalSecondaryIndexes:
+        # Backs GET /login/v1/m2m-clients (constant GSI1PK=M2M_CLIENTS, no scan).
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
       TimeToLiveSpecification:
         AttributeName: ttl
         Enabled: true
@@ -70,6 +84,12 @@ Resources:
                 - dynamodb:UpdateItem
                 - dynamodb:DeleteItem
               Resource: !GetAtt LoginApiTable.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt LoginApiTable.Arn
+                - !Sub "${LoginApiTable.Arn}/index/GSI1"
             - Effect: Allow
               Action:
                 - ssm:GetParameter

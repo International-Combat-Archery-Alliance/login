@@ -195,6 +195,7 @@ func setupApi(logger *slog.Logger) (*api.API, func(context.Context) error, error
 		MachineTokenSigner:   machineTokenSigner,
 		MachineTokenLifetime: machineTokenLifetime,
 		M2MStore:             m2mStore,
+		M2MProvisionStore:    m2mStore,
 		JWKSProvider:         jwksProvider,
 		AdminEmails:          cfg.AdminEmails,
 		Logger:               logger,
