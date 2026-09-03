@@ -37,8 +37,10 @@ const (
 // Defines values for ErrorCode.
 const (
 	AuthError            ErrorCode = "AuthError"
+	Conflict             ErrorCode = "Conflict"
 	InputValidationError ErrorCode = "InputValidationError"
 	InternalError        ErrorCode = "InternalError"
+	NotFound             ErrorCode = "NotFound"
 	RateLimited          ErrorCode = "RateLimited"
 )
 
@@ -74,6 +76,13 @@ type AccessToken struct {
 
 // AccessTokenTokenType defines model for AccessToken.TokenType.
 type AccessTokenTokenType string
+
+// CreateM2MClientRequest Provisioning request for a new machine client.
+type CreateM2MClientRequest struct {
+	// Audiences Provisioned audiences mapped to their exact scopes. May be empty to provision an identity before its scopes exist.
+	Audiences map[string][]string `json:"audiences"`
+	ClientId  string              `json:"clientId"`
+}
 
 // Error defines model for Error.
 type Error struct {
@@ -114,6 +123,35 @@ type JWKS struct {
 	Keys []JWK `json:"keys"`
 }
 
+// M2MClient Provisioned machine client metadata (never includes a secret).
+type M2MClient struct {
+	// Active False once revoked (DELETE). Revoked clients fail the exchange with 401.
+	Active bool `json:"active"`
+
+	// Audiences Provisioned audiences mapped to their exact scopes. An audience with no scopes (or no audiences at all) authenticates but authorizes nowhere.
+	Audiences map[string][]string `json:"audiences"`
+	ClientId  string              `json:"clientId"`
+}
+
+// M2MClientCredentials A machine client id plus its plaintext secret. The secret is returned exactly once on create/rotate — it is never logged and never retrievable again.
+type M2MClientCredentials struct {
+	ClientId string `json:"clientId"`
+
+	// ClientSecret The plaintext secret. Shown exactly once.
+	ClientSecret string `json:"clientSecret"`
+}
+
+// M2MClientList Admin list of provisioned machine clients (metadata only).
+type M2MClientList struct {
+	Clients []M2MClient `json:"clients"`
+}
+
+// UpdateM2MClientRequest Full replacement of a machine client's audiences map (secrets untouched).
+type UpdateM2MClientRequest struct {
+	// Audiences Complete new audiences-to-scopes map; entries omitted here are removed.
+	Audiences map[string][]string `json:"audiences"`
+}
+
 // UserInfo defines model for UserInfo.
 type UserInfo struct {
 	ExpiresAt     time.Time `json:"expiresAt"`
@@ -134,12 +172,21 @@ type PostLoginGoogleJSONBody struct {
 
 // PostLoginV1M2mTokensParams defines parameters for PostLoginV1M2mTokens.
 type PostLoginV1M2mTokensParams struct {
+	// Audience Target audience — must be one of the client's provisioned audiences.
+	Audience string `form:"audience" json:"audience"`
+
 	// Authorization HTTP Basic credentials - base64(clientId:clientSecret).
 	Authorization string `json:"Authorization"`
 }
 
 // PostLoginGoogleJSONRequestBody defines body for PostLoginGoogle for application/json ContentType.
 type PostLoginGoogleJSONRequestBody PostLoginGoogleJSONBody
+
+// PostLoginV1M2mClientsJSONRequestBody defines body for PostLoginV1M2mClients for application/json ContentType.
+type PostLoginV1M2mClientsJSONRequestBody = CreateM2MClientRequest
+
+// PatchLoginV1M2mClientsClientIdJSONRequestBody defines body for PatchLoginV1M2mClientsClientId for application/json ContentType.
+type PatchLoginV1M2mClientsClientIdJSONRequestBody = UpdateM2MClientRequest
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -158,6 +205,21 @@ type ServerInterface interface {
 	// Returns info about the current session/user
 	// (GET /login/session)
 	GetLoginSession(w http.ResponseWriter, r *http.Request)
+	// Lists provisioned machine clients (metadata only)
+	// (GET /login/v1/m2m-clients)
+	GetLoginV1M2mClients(w http.ResponseWriter, r *http.Request)
+	// Provisions a new machine client credential
+	// (POST /login/v1/m2m-clients)
+	PostLoginV1M2mClients(w http.ResponseWriter, r *http.Request)
+	// Revokes a machine client credential
+	// (DELETE /login/v1/m2m-clients/{clientId})
+	DeleteLoginV1M2mClientsClientId(w http.ResponseWriter, r *http.Request, clientId string)
+	// Replaces a machine client's audiences
+	// (PATCH /login/v1/m2m-clients/{clientId})
+	PatchLoginV1M2mClientsClientId(w http.ResponseWriter, r *http.Request, clientId string)
+	// Rotates a machine client secret
+	// (POST /login/v1/m2m-clients/{clientId}/rotate)
+	PostLoginV1M2mClientsClientIdRotate(w http.ResponseWriter, r *http.Request, clientId string)
 	// Exchanges machine client credentials for a short-lived JWT
 	// (POST /login/v1/m2m-tokens)
 	PostLoginV1M2mTokens(w http.ResponseWriter, r *http.Request, params PostLoginV1M2mTokensParams)
@@ -264,6 +326,149 @@ func (siw *ServerInterfaceWrapper) GetLoginSession(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
+// GetLoginV1M2mClients operation middleware
+func (siw *ServerInterfaceWrapper) GetLoginV1M2mClients(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, IcaaCookieAuthScopes, []string{"admin"})
+
+	ctx = context.WithValue(ctx, IcaaBearerAuthScopes, []string{"admin"})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetLoginV1M2mClients(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PostLoginV1M2mClients operation middleware
+func (siw *ServerInterfaceWrapper) PostLoginV1M2mClients(w http.ResponseWriter, r *http.Request) {
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, IcaaCookieAuthScopes, []string{"admin"})
+
+	ctx = context.WithValue(ctx, IcaaBearerAuthScopes, []string{"admin"})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PostLoginV1M2mClients(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteLoginV1M2mClientsClientId operation middleware
+func (siw *ServerInterfaceWrapper) DeleteLoginV1M2mClientsClientId(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "clientId" -------------
+	var clientId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "clientId", r.PathValue("clientId"), &clientId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "clientId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, IcaaCookieAuthScopes, []string{"admin"})
+
+	ctx = context.WithValue(ctx, IcaaBearerAuthScopes, []string{"admin"})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteLoginV1M2mClientsClientId(w, r, clientId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PatchLoginV1M2mClientsClientId operation middleware
+func (siw *ServerInterfaceWrapper) PatchLoginV1M2mClientsClientId(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "clientId" -------------
+	var clientId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "clientId", r.PathValue("clientId"), &clientId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "clientId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, IcaaCookieAuthScopes, []string{"admin"})
+
+	ctx = context.WithValue(ctx, IcaaBearerAuthScopes, []string{"admin"})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PatchLoginV1M2mClientsClientId(w, r, clientId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PostLoginV1M2mClientsClientIdRotate operation middleware
+func (siw *ServerInterfaceWrapper) PostLoginV1M2mClientsClientIdRotate(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "clientId" -------------
+	var clientId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "clientId", r.PathValue("clientId"), &clientId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "clientId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, IcaaCookieAuthScopes, []string{"admin"})
+
+	ctx = context.WithValue(ctx, IcaaBearerAuthScopes, []string{"admin"})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PostLoginV1M2mClientsClientIdRotate(w, r, clientId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // PostLoginV1M2mTokens operation middleware
 func (siw *ServerInterfaceWrapper) PostLoginV1M2mTokens(w http.ResponseWriter, r *http.Request) {
 
@@ -271,6 +476,21 @@ func (siw *ServerInterfaceWrapper) PostLoginV1M2mTokens(w http.ResponseWriter, r
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params PostLoginV1M2mTokensParams
+
+	// ------------- Required query parameter "audience" -------------
+
+	if paramValue := r.URL.Query().Get("audience"); paramValue != "" {
+
+	} else {
+		siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "audience"})
+		return
+	}
+
+	err = runtime.BindQueryParameter("form", true, true, "audience", r.URL.Query(), &params.Audience)
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "audience", Err: err})
+		return
+	}
 
 	headers := r.Header
 
@@ -433,6 +653,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("POST "+options.BaseURL+"/login/refresh", wrapper.PostLoginRefresh)
 	m.HandleFunc("DELETE "+options.BaseURL+"/login/session", wrapper.DeleteLoginSession)
 	m.HandleFunc("GET "+options.BaseURL+"/login/session", wrapper.GetLoginSession)
+	m.HandleFunc("GET "+options.BaseURL+"/login/v1/m2m-clients", wrapper.GetLoginV1M2mClients)
+	m.HandleFunc("POST "+options.BaseURL+"/login/v1/m2m-clients", wrapper.PostLoginV1M2mClients)
+	m.HandleFunc("DELETE "+options.BaseURL+"/login/v1/m2m-clients/{clientId}", wrapper.DeleteLoginV1M2mClientsClientId)
+	m.HandleFunc("PATCH "+options.BaseURL+"/login/v1/m2m-clients/{clientId}", wrapper.PatchLoginV1M2mClientsClientId)
+	m.HandleFunc("POST "+options.BaseURL+"/login/v1/m2m-clients/{clientId}/rotate", wrapper.PostLoginV1M2mClientsClientIdRotate)
 	m.HandleFunc("POST "+options.BaseURL+"/login/v1/m2m-tokens", wrapper.PostLoginV1M2mTokens)
 
 	return m
@@ -603,6 +828,286 @@ func (response GetLoginSession401JSONResponse) VisitGetLoginSessionResponse(w ht
 	return json.NewEncoder(w).Encode(response)
 }
 
+type GetLoginV1M2mClientsRequestObject struct {
+}
+
+type GetLoginV1M2mClientsResponseObject interface {
+	VisitGetLoginV1M2mClientsResponse(w http.ResponseWriter) error
+}
+
+type GetLoginV1M2mClients200JSONResponse M2MClientList
+
+func (response GetLoginV1M2mClients200JSONResponse) VisitGetLoginV1M2mClientsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetLoginV1M2mClients401JSONResponse Error
+
+func (response GetLoginV1M2mClients401JSONResponse) VisitGetLoginV1M2mClientsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type GetLoginV1M2mClients500JSONResponse Error
+
+func (response GetLoginV1M2mClients500JSONResponse) VisitGetLoginV1M2mClientsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mClientsRequestObject struct {
+	Body *PostLoginV1M2mClientsJSONRequestBody
+}
+
+type PostLoginV1M2mClientsResponseObject interface {
+	VisitPostLoginV1M2mClientsResponse(w http.ResponseWriter) error
+}
+
+type PostLoginV1M2mClients201JSONResponse M2MClientCredentials
+
+func (response PostLoginV1M2mClients201JSONResponse) VisitPostLoginV1M2mClientsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(201)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mClients400JSONResponse Error
+
+func (response PostLoginV1M2mClients400JSONResponse) VisitPostLoginV1M2mClientsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mClients401JSONResponse Error
+
+func (response PostLoginV1M2mClients401JSONResponse) VisitPostLoginV1M2mClientsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mClients409JSONResponse Error
+
+func (response PostLoginV1M2mClients409JSONResponse) VisitPostLoginV1M2mClientsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mClients500JSONResponse Error
+
+func (response PostLoginV1M2mClients500JSONResponse) VisitPostLoginV1M2mClientsResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteLoginV1M2mClientsClientIdRequestObject struct {
+	ClientId string `json:"clientId"`
+}
+
+type DeleteLoginV1M2mClientsClientIdResponseObject interface {
+	VisitDeleteLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error
+}
+
+type DeleteLoginV1M2mClientsClientId200JSONResponse M2MClient
+
+func (response DeleteLoginV1M2mClientsClientId200JSONResponse) VisitDeleteLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteLoginV1M2mClientsClientId400JSONResponse Error
+
+func (response DeleteLoginV1M2mClientsClientId400JSONResponse) VisitDeleteLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteLoginV1M2mClientsClientId401JSONResponse Error
+
+func (response DeleteLoginV1M2mClientsClientId401JSONResponse) VisitDeleteLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteLoginV1M2mClientsClientId404JSONResponse Error
+
+func (response DeleteLoginV1M2mClientsClientId404JSONResponse) VisitDeleteLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type DeleteLoginV1M2mClientsClientId500JSONResponse Error
+
+func (response DeleteLoginV1M2mClientsClientId500JSONResponse) VisitDeleteLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PatchLoginV1M2mClientsClientIdRequestObject struct {
+	ClientId string `json:"clientId"`
+	Body     *PatchLoginV1M2mClientsClientIdJSONRequestBody
+}
+
+type PatchLoginV1M2mClientsClientIdResponseObject interface {
+	VisitPatchLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error
+}
+
+type PatchLoginV1M2mClientsClientId200JSONResponse M2MClient
+
+func (response PatchLoginV1M2mClientsClientId200JSONResponse) VisitPatchLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PatchLoginV1M2mClientsClientId400JSONResponse Error
+
+func (response PatchLoginV1M2mClientsClientId400JSONResponse) VisitPatchLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PatchLoginV1M2mClientsClientId401JSONResponse Error
+
+func (response PatchLoginV1M2mClientsClientId401JSONResponse) VisitPatchLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PatchLoginV1M2mClientsClientId404JSONResponse Error
+
+func (response PatchLoginV1M2mClientsClientId404JSONResponse) VisitPatchLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PatchLoginV1M2mClientsClientId500JSONResponse Error
+
+func (response PatchLoginV1M2mClientsClientId500JSONResponse) VisitPatchLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mClientsClientIdRotateRequestObject struct {
+	ClientId string `json:"clientId"`
+}
+
+type PostLoginV1M2mClientsClientIdRotateResponseObject interface {
+	VisitPostLoginV1M2mClientsClientIdRotateResponse(w http.ResponseWriter) error
+}
+
+type PostLoginV1M2mClientsClientIdRotate200JSONResponse M2MClientCredentials
+
+func (response PostLoginV1M2mClientsClientIdRotate200JSONResponse) VisitPostLoginV1M2mClientsClientIdRotateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mClientsClientIdRotate400JSONResponse Error
+
+func (response PostLoginV1M2mClientsClientIdRotate400JSONResponse) VisitPostLoginV1M2mClientsClientIdRotateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mClientsClientIdRotate401JSONResponse Error
+
+func (response PostLoginV1M2mClientsClientIdRotate401JSONResponse) VisitPostLoginV1M2mClientsClientIdRotateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mClientsClientIdRotate404JSONResponse Error
+
+func (response PostLoginV1M2mClientsClientIdRotate404JSONResponse) VisitPostLoginV1M2mClientsClientIdRotateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mClientsClientIdRotate409JSONResponse Error
+
+func (response PostLoginV1M2mClientsClientIdRotate409JSONResponse) VisitPostLoginV1M2mClientsClientIdRotateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(409)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PostLoginV1M2mClientsClientIdRotate500JSONResponse Error
+
+func (response PostLoginV1M2mClientsClientIdRotate500JSONResponse) VisitPostLoginV1M2mClientsClientIdRotateResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type PostLoginV1M2mTokensRequestObject struct {
 	Params PostLoginV1M2mTokensParams
 }
@@ -678,6 +1183,21 @@ type StrictServerInterface interface {
 	// Returns info about the current session/user
 	// (GET /login/session)
 	GetLoginSession(ctx context.Context, request GetLoginSessionRequestObject) (GetLoginSessionResponseObject, error)
+	// Lists provisioned machine clients (metadata only)
+	// (GET /login/v1/m2m-clients)
+	GetLoginV1M2mClients(ctx context.Context, request GetLoginV1M2mClientsRequestObject) (GetLoginV1M2mClientsResponseObject, error)
+	// Provisions a new machine client credential
+	// (POST /login/v1/m2m-clients)
+	PostLoginV1M2mClients(ctx context.Context, request PostLoginV1M2mClientsRequestObject) (PostLoginV1M2mClientsResponseObject, error)
+	// Revokes a machine client credential
+	// (DELETE /login/v1/m2m-clients/{clientId})
+	DeleteLoginV1M2mClientsClientId(ctx context.Context, request DeleteLoginV1M2mClientsClientIdRequestObject) (DeleteLoginV1M2mClientsClientIdResponseObject, error)
+	// Replaces a machine client's audiences
+	// (PATCH /login/v1/m2m-clients/{clientId})
+	PatchLoginV1M2mClientsClientId(ctx context.Context, request PatchLoginV1M2mClientsClientIdRequestObject) (PatchLoginV1M2mClientsClientIdResponseObject, error)
+	// Rotates a machine client secret
+	// (POST /login/v1/m2m-clients/{clientId}/rotate)
+	PostLoginV1M2mClientsClientIdRotate(ctx context.Context, request PostLoginV1M2mClientsClientIdRotateRequestObject) (PostLoginV1M2mClientsClientIdRotateResponseObject, error)
 	// Exchanges machine client credentials for a short-lived JWT
 	// (POST /login/v1/m2m-tokens)
 	PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTokensRequestObject) (PostLoginV1M2mTokensResponseObject, error)
@@ -839,6 +1359,146 @@ func (sh *strictHandler) GetLoginSession(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+// GetLoginV1M2mClients operation middleware
+func (sh *strictHandler) GetLoginV1M2mClients(w http.ResponseWriter, r *http.Request) {
+	var request GetLoginV1M2mClientsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetLoginV1M2mClients(ctx, request.(GetLoginV1M2mClientsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetLoginV1M2mClients")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetLoginV1M2mClientsResponseObject); ok {
+		if err := validResponse.VisitGetLoginV1M2mClientsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PostLoginV1M2mClients operation middleware
+func (sh *strictHandler) PostLoginV1M2mClients(w http.ResponseWriter, r *http.Request) {
+	var request PostLoginV1M2mClientsRequestObject
+
+	var body PostLoginV1M2mClientsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PostLoginV1M2mClients(ctx, request.(PostLoginV1M2mClientsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PostLoginV1M2mClients")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PostLoginV1M2mClientsResponseObject); ok {
+		if err := validResponse.VisitPostLoginV1M2mClientsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteLoginV1M2mClientsClientId operation middleware
+func (sh *strictHandler) DeleteLoginV1M2mClientsClientId(w http.ResponseWriter, r *http.Request, clientId string) {
+	var request DeleteLoginV1M2mClientsClientIdRequestObject
+
+	request.ClientId = clientId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteLoginV1M2mClientsClientId(ctx, request.(DeleteLoginV1M2mClientsClientIdRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteLoginV1M2mClientsClientId")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteLoginV1M2mClientsClientIdResponseObject); ok {
+		if err := validResponse.VisitDeleteLoginV1M2mClientsClientIdResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PatchLoginV1M2mClientsClientId operation middleware
+func (sh *strictHandler) PatchLoginV1M2mClientsClientId(w http.ResponseWriter, r *http.Request, clientId string) {
+	var request PatchLoginV1M2mClientsClientIdRequestObject
+
+	request.ClientId = clientId
+
+	var body PatchLoginV1M2mClientsClientIdJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PatchLoginV1M2mClientsClientId(ctx, request.(PatchLoginV1M2mClientsClientIdRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PatchLoginV1M2mClientsClientId")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PatchLoginV1M2mClientsClientIdResponseObject); ok {
+		if err := validResponse.VisitPatchLoginV1M2mClientsClientIdResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PostLoginV1M2mClientsClientIdRotate operation middleware
+func (sh *strictHandler) PostLoginV1M2mClientsClientIdRotate(w http.ResponseWriter, r *http.Request, clientId string) {
+	var request PostLoginV1M2mClientsClientIdRotateRequestObject
+
+	request.ClientId = clientId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PostLoginV1M2mClientsClientIdRotate(ctx, request.(PostLoginV1M2mClientsClientIdRotateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PostLoginV1M2mClientsClientIdRotate")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PostLoginV1M2mClientsClientIdRotateResponseObject); ok {
+		if err := validResponse.VisitPostLoginV1M2mClientsClientIdRotateResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // PostLoginV1M2mTokens operation middleware
 func (sh *strictHandler) PostLoginV1M2mTokens(w http.ResponseWriter, r *http.Request, params PostLoginV1M2mTokensParams) {
 	var request PostLoginV1M2mTokensRequestObject
@@ -868,42 +1528,67 @@ func (sh *strictHandler) PostLoginV1M2mTokens(w http.ResponseWriter, r *http.Req
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"H4sIAAAAAAAC/+xb63LctpJ+lS5uqjLa5Vxkyz4VufxjosiJ5ZtKUo5++HgdiOyZQQQCDACONMelqn2I",
+	"fcJ9kq0GwNuQM5KTWHZc+SUNCYKNvnz9dQP8ECUqy5VEaU20/yEyyQIz5v6dJgkac6YuUdLPFE2ieW65",
+	"ktF+NAWzUNoOBV9iChlLFlwiHJ2fxZCLwgC3BjK0LGWWjaI4yrXKUVuObmrmpn5v++c+WyCcnD549Lg5",
+	"Lwy+R6ZR79BsdpVjtB8Zq7mcRzdxhNc512je877p6C0g+AwtzxC4BIOJkqmBwcPJBJ7CI8i4LCwaNzde",
+	"sywXGO0/nEyqN3FpcY6aXuWEfu+vf4hQFlm0/zbywkXvOrLdxJHG3wquMaVxrZW3Jmstop5HXfyKiaUX",
+	"H2hkFl89eHUgOEp7gr8VaGx3vcdaLbnhSnI5B+1HwUxpYCDxqtJp4mbpsU2RcpRJ+JGmnKZl4rg1iFvM",
+	"3D85sxY1vfa/swfZ/ls2/Pdk+N3w3X9902emcIFpzVb0e4PgmEIlBWQszzEFq8AukGvAa5ZYMInK0Yzg",
+	"FVvBBQJmuV3RmLycA5gEnqK03NKImdLonNI/CHjNjW2Z+wPpYcYFmiHLOdmKFpQLtkI9LG9F7256LONV",
+	"+Tx1DlHOF+ESpR1qnHNjNXNrjKOMXb9EObeLaP/xXtxUX6W6D7vx472bb6LbXKl6a9ywWZ/jHGqtdFhg",
+	"w4aJSt2yv9E4i/aj/xjXSDAOMDB2jx7QwJs4ytAYNsf2KqcSConXOSYWU0AaDypJCq0xHd2+Bpq6nnmj",
+	"9AcqbYXbc0lqY8LdjOJoWthF+f9zmRf2n0zw1Cm9vHzCLL7kGbdIGnut7DNVSPr3QMmZ4IntCd44Ojp/",
+	"0Y2wk9Mp5MWF4Alc4goGJ88O4B+Pdv+xE8MlT0GyDE3OkhoYh/8JA4N6yRMEF/JmB5SGwqCmW/S3vN4T",
+	"kGLeXLpDxl5ZsSvp98zg471CiyFK0nUKDdnx2pu7F1Ev+Zo7l0uZ7PYOt6u2kNNeEeVdRcxUWojC9IpW",
+	"mJ6VvsAV6ROGYPicoI8eLcUxfH47NNMS/LpJTlJnnzsenb847b796PTNazjHCyAxTtE2fALUDJ4fTKfe",
+	"wLBEzWc8ca5J3mO6BqerLZDdFqHkoB1kXV8ZTdi3mCqZbMkijfTuEafK6zCQuEQNXCaiSNEAo8yq0fY5",
+	"cWL5ssdsz5gwCEomCBqX6hJTGPxw+PLw7HBnBCfhin+vgRnjgrIA4HWyYHKOcMXtAvYmuw0/uVBKIJPR",
+	"TRMW/wqpbCqroX5dUoV7MFCaftUzMQtMiB1ghV2gtORPaOCisO6K0vzfaECqqwVq/AqzXFz601anPtDo",
+	"CAATpo/Arnk1T2vmmgvGpcVrGxx6BMRJ/f/ADWi0hSbbOguKlXdgJSFxHG2slWUW4f/+53+Buwd8oAg1",
+	"n5NDyDRc0Gg1xyW7EAhszrgc/Ut2Qucj9N7xUv/sqRO8n2h3l3q6UFeytbLRx1ip9cqt9nnJ++jrNM04",
+	"0XVjCTnzjTBkYFABkZJi1QM6YeCdsbSS7FZELWfuW9/PeXonnv6sEAI05oIlmJEHqhmwtUV+a9rwQTSC",
+	"FGugkFYVyQLTnS+Jwh8ock+LrtKoxBhaNQxIlrH8CaAktzegMm6JNRJKAdOUAjK19LzxjyPWeuW1lSP/",
+	"bFA/lzPVpcmhKps6C86UzpiN9iMy8ZDqyT4dBamOefLzyUt6rDNCK4E9oERSkMkNcRhMwQ+La1uVhGb6",
+	"w6vnr3sZ1rp9iFseZoyLHjnWNNQWO26svDlNKfy7PoUbTArN7eqUIir4WcKYr46JpNOVC/frWanKo/Oz",
+	"aN2PHGHytXLgTVzCNKQ2z50WyFLUUexbFi7zu3lrgyyszUkFJMGBUpccSwlue1niRpPi6X71i4h9GP9+",
+	"enBweHr6/uzNi8PX9StZzl/gqnzpCc40msWt79Z+XOvlMKCS3V8p76NMc8Wl3dkq2cnhs5PD0582iUZm",
+	"4sHT15BXwvT4uWsVUKai9gGXVjn26lIAt6J8C7xUcy6jOFqiNv7x3dFkNKGlqxylC9XoobvkCMDCOcNY",
+	"0GPj0RUKMbyU6kqOf726NKNfjXKlwbwvTZ2iXqJxxK9deZmaZsPR+Qsi3jtUBDiK5Yj2ylPvo/MzE9MT",
+	"mMLFyhVpg7o0owW3q7O4LM1moUqrqjOXnwkenBNSUo5+ROuUcY5CvKAlHV1dmiPjErJGkytpfCQ8mEwi",
+	"V3dLGyg3y3MRaoFxqQKfjO5A+0+9LdcKkfMXYJAi1seHe/EBSxY4PFDSaiW6+nW3HQeh5VbdsJgoproC",
+	"Y5kgaC6MH8AkLFShR1HckLUmJt48MWTsesjm+JTaaH6O4dWCCxxqXPriHJ8+fDyZ9HALWtajP1FZvgXQ",
+	"o61njAvvLUKxtKwcnWu14Czaf/sujkyRZUyvqAHg+J93yU7pRzraUPC5SUMMzJWah/ymPD1ou9WxMt6v",
+	"fvQDPVajsd+rdPVRqmnnM/9eAt1bE0I9tAfsb+IeNulldf1ap1RCEFfMRM2ZrS7w5hMGR5XMe6QkGAZT",
+	"OLSfFcIz+wD+RMxbWGwCKwlsn5fgbFyPJ4VfOqngFzfJL10g/sVDRyMqT9EOfWroZ+Y+LRU2yFK+elPc",
+	"dUR5+q9iMnmYNDvO7go+gWNmF0/HT+Ana/M3Uqxi6AocHg/62P78hhjem+x++hj+WVYlbzraGrUv1dyQ",
+	"Db2Z6wh2Og6ptBGgYeXNCO2wNT9Bb/62CuYoKaIxdN6bFMP7nRJrDke1IpclPvpS0T+sJLqbxhTUI/Gj",
+	"XZ3JlezNSxWABBoSfaaIO2txmDr07h4Nr2vldUL094aFxKv3fzA0aIq/VHjAsHQuUBo8vV9T53oAfdhE",
+	"ZN++u1lLiW5IiIgWmy4MJVXW86IQaQaN55BkeCofuy7wg7vuJy8x2PsCtQj7wvBqQeFkTRmP3ECu0aC0",
+	"mMaAsxm6FpJYVWSX5nBkTxV21AknL4ELqNMgb39AdUu6svGjCvsRKQCF8Ou60OrKc1Dw6mlq4e5+X/vl",
+	"K3Y9nM7x6eRJr3f3Dex14T5XWfOR+M4O5NC5aQIqJXrrgZJ9URWjM18NsgtVWK+XQmuUNtjVZ22acrSR",
+	"uG835yfHR7rn1hJ9xpTZobYkUFerEEJ1TBpthvByd5w9yIaNjtscNzX3htSuqzp8na5e2UuM6wZSDL7f",
+	"uzOC09D/ImLWaaJuK8/+ufvqQXYQ5PuEpm63N3u07++69d+bxV9xQyA8LuHfUR63qSCHzDVcEyaEP+Bw",
+	"L5VXuYHrd4yj26EkcmJGFaI0W0r1zTaicGPNx3SQafX9VO/HwORoj6vZ4I7BdLvlcLbgxrVSvIOm3FjN",
+	"L4oyf/kW7j6BOafqkPosNuwKBTtQtmI0LSmeW/AurTQYi/kI9ibfAZ/58SFagAmNLF35kw0GBn5Xzp8B",
+	"8dtoGhOlU7OdLHbC5PfVnNucYsNBlpubm9uLxN0/P06b20Sbw7XpRoN6J6hr/h0f1PcSQz6YKxdQuobM",
+	"LxJa9ibffXqBNkTEVwVt1f6y6T3VBUnl05uT9PhDqambbcz7FdOXpgE19T49SeB2Lk1Iz09nbjefSzec",
+	"EtxOBwz9rpUJTjE0PK02Vo1Vms1xH9jMury+VJdczuOwLUROFbbLGkj5LRH8fEVMosZWXxooIcYak1Ui",
+	"ysEGBnaBK0io40mgy+itTNsi3xnBm8Iay6TDzND+8TWS62BxWbdG/dGEcIiDCgvUGSP3gCVnYMOK+3C2",
+	"UUU0kfag3j/NmWYZWlchvO0aY23PelRuBVCLvd4IaOzHthG1WSz8oV36d/dBofrCq30oJCS1z4a5XyjM",
+	"7t1HEeH2b1qa+Grw9SS0Fdg2YHUhkyz6ClSHUmW3ImyJb9gO79v2v32L3B0ahA83RBspJnParAltl7Uq",
+	"qTop4M6jlC1DMJYLAXPlxNSqmC9gNBqFoyuxQ9DymJVxexp67TTWJWLujmR5jjlnOhVojKvpypPfMCX7",
+	"0ytUyBGNrk09FRP8srd4OyYFfy1o+ecz6Q1HTe7EpO8Jrr2IXwpcx+Gk+IVKVzHB5wWrD+iNfVD+Delf",
+	"KaQHUN52xupObDlg5OaNoefGFFgy87u0CxByjUuuClMSWAJXA1dKEwMmCA8nX6tGQGge+BxD72kyX096",
+	"S5JtRvBD3WpYG/8RbYe7tg1KeD7xavqb0n5Et+F1bZnBl9Rb+BsU25q4hz5GaDxxU9GlQThXTIxRApeB",
+	"UXnJdr4utHYr7SHgPjh6cNpX7JtB2atzWBN4U39G0DgB5si5/7d5up6rsGW/Jk77AL47tv/T2dkxfM8M",
+	"T9xdGLTOLe6HWxfus5dqs2O/mSZ2dgKMOzpHSnCLc2Iq6ezP1zrbVQYbwRtZbrIDg0dD37Lo+aCycY49",
+	"hgv6GMonA2bXvkPwX1zUnyq0XkwycTsC7xRohzOWuO1eWgA5q/DfXD2BvQffNd/pN2ip9LBWYHp7djnz",
+	"Br4lnTS03zT1cLvCq5xTnSoNWadlu+2ph8sy9exOes7Ld/Z3mZ5jQ9VUnGWFsfQ5YzBy3XT7dpO1S7l/",
+	"K1CvarHLAX/NZNn88rgvRQQnLk/M0ImYe0uMIT9RSsqYoA1oTHv8rdGKv8dt3XamiqvTHm0O2pANpLKd",
+	"cG70egdhhveNHLP34B6S30kDOsAdSE4uwwmKz5PmYICj+Qhmm0+M7mw9fHZY9VI2dpRM+Eq7+WU9Hb78",
+	"mIMWrdTqcyqdnu6FymOt0iKxrhnkBkVxVGgRTs6b/fGY5XxEs46ulBbpOOqi2EuVMAEpLvum2B+PBd1f",
+	"KGPpc/rdcXTz7ub/BwCwQUiHc0AAAA==",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file

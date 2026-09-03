@@ -114,9 +114,10 @@ paths:
       description: >
         Client-credentials exchange for service-to-service authentication.
         The machine client authenticates with HTTP Basic auth
-        (Authorization: Basic base64(clientId:clientSecret)).
-        On success a 5-minute RS256 machine JWT is returned.
-        Internet-facing and rate limited (DynamoDB fixed-window counter);
+        (Authorization: Basic base64(clientId:clientSecret)) and requests a
+        token for one of its provisioned audiences. On success a 5-minute
+        RS256 machine JWT is returned, bound to that audience with the exact
+        scopes provisioned for it. Internet-facing and rate limited;
         429 is returned when throttled.
       security: []
       parameters:
@@ -127,6 +128,14 @@ paths:
           schema:
             type: string
             minLength: 10
+        - name: audience
+          in: query
+          required: true
+          description: Target audience — must be one of the client's provisioned audiences.
+          schema:
+            type: string
+            pattern: '^[a-z0-9-]{1,64}$'
+            maxLength: 64
       responses:
         '200':
           description: Machine token issued
@@ -135,13 +144,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/AccessToken'
         '400':
-          description: Missing or malformed Basic credentials
+          description: Missing or malformed Basic credentials or audience
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Unknown clientId or invalid clientSecret (invalid_client)
+          description: Unknown clientId, invalid clientSecret, or audience not provisioned for the client (invalid_client)
           content:
             application/json:
               schema:
@@ -154,6 +163,247 @@ paths:
                 $ref: '#/components/schemas/Error'
         '500':
           description: Internal error (e.g. failed to load signing keys)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /login/v1/m2m-clients:
+    get:
+      summary: Lists provisioned machine clients (metadata only)
+      description: >
+        Admin-only list of machine clients (clientId, audiences, active).
+        Secrets are never retrievable.
+      security:
+        - icaaCookieAuth: [admin]
+        - icaaBearerAuth: [admin]
+      responses:
+        '200':
+          description: Client list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/M2MClientList'
+        '401':
+          description: Missing/invalid auth or non-admin caller
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    post:
+      summary: Provisions a new machine client credential
+      description: >
+        Generates a clientSecret, shown exactly once. This API never
+        distributes the secret: delivering it to the caller is an explicit
+        operator step. 409 if the clientId already exists (including revoked
+        records).
+      security:
+        - icaaCookieAuth: [admin]
+        - icaaBearerAuth: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateM2MClientRequest'
+      responses:
+        '201':
+          description: Client provisioned (secret is shown exactly once)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/M2MClientCredentials'
+        '400':
+          description: Invalid clientId or audiences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing/invalid auth or non-admin caller
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: clientId already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /login/v1/m2m-clients/{clientId}:
+    delete:
+      summary: Revokes a machine client credential
+      description: >
+        Marks the client revoked (visible as active=false in the list). This
+        API never touches caller-side secret storage: after revoking, remove
+        or replace the caller's copy of the secret and roll/recycle callers
+        (they cache it at startup). Outstanding tokens expire within 5
+        minutes. Revocation is permanent via this API.
+      security:
+        - icaaCookieAuth: [admin]
+        - icaaBearerAuth: [admin]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          description: Machine client id.
+          schema:
+            type: string
+            pattern: '^[a-z0-9-]{1,64}$'
+            maxLength: 64
+      responses:
+        '200':
+          description: Revoked client record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/M2MClient'
+        '400':
+          description: Invalid clientId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing/invalid auth or non-admin caller
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown clientId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+    patch:
+      summary: Replaces a machine client's audiences
+      description: >
+        Replaces the complete audiences-to-scopes map of a machine client;
+        entries omitted here are removed (use {} to strip all access).
+        Secrets are untouched — rotation still goes through .../rotate, and
+        exchanges for revoked clients keep failing regardless of metadata.
+        Applies to active and revoked clients alike.
+      security:
+        - icaaCookieAuth: [admin]
+        - icaaBearerAuth: [admin]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          description: Machine client id.
+          schema:
+            type: string
+            pattern: '^[a-z0-9-]{1,64}$'
+            maxLength: 64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateM2MClientRequest'
+      responses:
+        '200':
+          description: Updated client record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/M2MClient'
+        '400':
+          description: Invalid clientId, empty body, or bad audience/scopes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing/invalid auth or non-admin caller
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown clientId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /login/v1/m2m-clients/{clientId}/rotate:
+    post:
+      summary: Rotates a machine client secret
+      description: >
+        Issues a new clientSecret, shown exactly once. The previous secret
+        keeps working until the operator delivers the new secret and recycles
+        callers. Delivering the new secret to the caller is an explicit
+        operator step.
+      security:
+        - icaaCookieAuth: [admin]
+        - icaaBearerAuth: [admin]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          description: Machine client id.
+          schema:
+            type: string
+            pattern: '^[a-z0-9-]{1,64}$'
+            maxLength: 64
+      responses:
+        '200':
+          description: New secret (shown exactly once)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/M2MClientCredentials'
+        '400':
+          description: Invalid clientId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing/invalid auth or non-admin caller
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown clientId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: Client is revoked (rotate of an inactive client)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
           content:
             application/json:
               schema:
@@ -232,6 +482,8 @@ components:
         - AuthError
         - InputValidationError
         - RateLimited
+        - NotFound
+        - Conflict
     Error:
       type: object
       required:
@@ -263,6 +515,93 @@ components:
           type: integer
           description: Token lifetime in seconds (300 = 5 minutes).
           example: 300
+    M2MClient:
+      type: object
+      description: Provisioned machine client metadata (never includes a secret).
+      required:
+        - clientId
+        - audiences
+        - active
+      properties:
+        clientId:
+          type: string
+          pattern: '^[a-z0-9-]{1,64}$'
+          maxLength: 64
+          example: event-registration
+        audiences:
+          type: object
+          description: Provisioned audiences mapped to their exact scopes. An audience with no scopes (or no audiences at all) authenticates but authorizes nowhere.
+          additionalProperties:
+            type: array
+            items:
+              type: string
+              pattern: '^m2m:[a-z0-9-]+$'
+          example: {'profiles-api': ['m2m:player-profiles']}
+        active:
+          type: boolean
+          description: False once revoked (DELETE). Revoked clients fail the exchange with 401.
+    CreateM2MClientRequest:
+      type: object
+      description: Provisioning request for a new machine client.
+      required:
+        - clientId
+        - audiences
+      properties:
+        clientId:
+          type: string
+          pattern: '^[a-z0-9-]{1,64}$'
+          maxLength: 64
+          example: event-registration
+        audiences:
+          type: object
+          description: Provisioned audiences mapped to their exact scopes. May be empty to provision an identity before its scopes exist.
+          additionalProperties:
+            type: array
+            items:
+              type: string
+              pattern: '^m2m:[a-z0-9-]+$'
+          example: {'profiles-api': ['m2m:player-profiles']}
+    M2MClientCredentials:
+      type: object
+      description: >
+        A machine client id plus its plaintext secret. The secret is returned
+        exactly once on create/rotate — it is never logged and never
+        retrievable again.
+      required:
+        - clientId
+        - clientSecret
+      properties:
+        clientId:
+          type: string
+          example: event-registration
+        clientSecret:
+          type: string
+          description: The plaintext secret. Shown exactly once.
+    UpdateM2MClientRequest:
+      type: object
+      description: Full replacement of a machine client's audiences map (secrets untouched).
+      required:
+        - audiences
+      properties:
+        audiences:
+          type: object
+          description: Complete new audiences-to-scopes map; entries omitted here are removed.
+          additionalProperties:
+            type: array
+            items:
+              type: string
+              pattern: '^m2m:[a-z0-9-]+$'
+          example: {'profiles-api': ['m2m:player-profiles']}
+    M2MClientList:
+      type: object
+      description: Admin list of provisioned machine clients (metadata only).
+      required:
+        - clients
+      properties:
+        clients:
+          type: array
+          items:
+            $ref: '#/components/schemas/M2MClient'
     JWKS:
       type: object
       description: JSON Web Key Set (RFC 7517) of ICAA token verification keys.
