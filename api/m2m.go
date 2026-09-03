@@ -11,6 +11,7 @@ import (
 
 	"github.com/International-Combat-Archery-Alliance/login/dynamo"
 	"github.com/International-Combat-Archery-Alliance/middleware"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -49,12 +50,14 @@ type M2MStore interface {
 // PostLoginV1M2mTokens is the client-credentials exchange.
 //
 // Flow:
-//  1. Fixed-window limiter + lockout — before bcrypt, so failed attempts
-//     never burn Lambda CPU.
-//  2. bcrypt verify of the client secret (constant-time), with a dummy
-//     compare so unknown clientIds are not a timing oracle.
-//  3. On success a 5-minute RS256 machine JWT is minted with the client's
-//     allowed audience + exact scope.
+//  1. Existence first: unknown/inactive clients get a dummy bcrypt + 401 with
+//     no RATE# writes (no table fill, no lockout state for fakes). Aggregate
+//     CPU abuse of fakes is covered by the Cloudflare per-IP rule (INT-8).
+//  2. Known clients: fixed-window limiter + lockout, then bcrypt. Lockout has
+//     a valid-secret bypass (throttled by the same window) so an attacker who
+//     knows the clientId cannot starve the real service.
+//  3. On success a machine JWT is minted with the client's allowed audience +
+//     exact scope; ResetFailures is non-fatal.
 func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTokensRequestObject) (PostLoginV1M2mTokensResponseObject, error) {
 	ctx, span := a.tracer.Start(ctx, "PostLoginV1M2mTokens")
 	defer span.End()
@@ -79,36 +82,8 @@ func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTo
 
 	now := time.Now()
 
-	// Fixed-window limiter + lockout, before bcrypt.
-	window, err := a.m2mStore.BumpWindow(ctx, clientID, now)
-	if err != nil {
-		span.RecordError(err)
-		logger.Error("m2m rate window bump failed", slog.String("error", err.Error()))
-		return PostLoginV1M2mTokens500JSONResponse{
-			Message: "internal error",
-			Code:    InternalError,
-		}, nil
-	}
-
-	// Lockout: any request while locked -> 429. Logs the alarm marker.
-	if window.LockedUntil != nil && window.LockedUntil.After(now) {
-		logger.Warn("m2m lockout", slog.String("clientId", clientID), slog.Time("lockedUntil", *window.LockedUntil))
-		return PostLoginV1M2mTokens429JSONResponse{
-			Message: "Too many failed attempts; try again later",
-			Code:    RateLimited,
-		}, nil
-	}
-
-	if window.WindowCount > a.m2mStore.WindowLimit() {
-		return PostLoginV1M2mTokens429JSONResponse{
-			Message: "Rate limit exceeded",
-			Code:    RateLimited,
-		}, nil
-	}
-
-	// Client verification: bcrypt + constant-time compare. Unknown/inactive
-	// clients short-circuit with a dummy compare so clientId existence is not
-	// a timing oracle.
+	// Existence first so fake IDs never create RATE# items. Dummy compare
+	// preserves timing so existence is not an oracle.
 	client, err := a.m2mStore.GetClient(ctx, clientID)
 	if err != nil {
 		span.RecordError(err)
@@ -120,24 +95,49 @@ func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTo
 	}
 
 	if client == nil || len(client.SecretRounds) == 0 || !client.Active {
-		// Equalize timing with the unknown-client path.
 		_ = bcrypt.CompareHashAndPassword(a.dummyClientSecretHash, []byte(clientSecret))
-		a.recordM2MFailure(ctx, clientID, now, logger)
+		logger.Warn("m2m invalid_client", slog.String("clientId", clientID))
 		return PostLoginV1M2mTokens401JSONResponse{
 			Message: "invalid client credentials",
 			Code:    AuthError,
+		}, nil
+	}
+
+	// Known client: fixed-window limiter, before bcrypt (caps bcrypt CPU).
+	window, err := a.m2mStore.BumpWindow(ctx, clientID, now)
+	if err != nil {
+		span.RecordError(err)
+		logger.Error("m2m rate window bump failed", slog.String("error", err.Error()))
+		return PostLoginV1M2mTokens500JSONResponse{
+			Message: "internal error",
+			Code:    InternalError,
+		}, nil
+	}
+
+	if window.WindowCount > a.m2mStore.WindowLimit() {
+		return PostLoginV1M2mTokens429JSONResponse{
+			Message: "Rate limit exceeded",
+			Code:    RateLimited,
+		}, nil
+	}
+
+	// Lockout with valid-secret bypass: a prover of the secret always gets
+	// through (and clears), throttled by the same window above (max 30
+	// bcrypt/min/ID). Invalid while locked stays 429 with no RecordFailure
+	// so the lock is not sticky under spam.
+	if window.LockedUntil != nil && window.LockedUntil.After(now) {
+		if verifyM2MSecret(client.SecretRounds, clientSecret) {
+			return a.issueM2MToken(ctx, span, clientID, client, now, logger)
+		}
+		logger.Warn("m2m lockout", slog.String("clientId", clientID), slog.Time("lockedUntil", *window.LockedUntil))
+		return PostLoginV1M2mTokens429JSONResponse{
+			Message: "Too many failed attempts; try again later",
+			Code:    RateLimited,
 		}, nil
 	}
 
 	// Constant-time compare against any active round (rotation grace window).
-	valid := false
-	for _, round := range client.SecretRounds {
-		if bcrypt.CompareHashAndPassword([]byte(round), []byte(clientSecret)) == nil {
-			valid = true
-			break
-		}
-	}
-	if !valid {
+	if !verifyM2MSecret(client.SecretRounds, clientSecret) {
 		a.recordM2MFailure(ctx, clientID, now, logger)
 		return PostLoginV1M2mTokens401JSONResponse{
 			Message: "invalid client credentials",
@@ -145,9 +145,22 @@ func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTo
 		}, nil
 	}
 
-	// Mint the machine token with the client's allowed audience + exact scope.
-	// Signing runs before ResetFailures so a transient DDB write failure on
-	// the non-security clear cannot 500 a valid credential.
+	return a.issueM2MToken(ctx, span, clientID, client, now, logger)
+}
+
+// verifyM2MSecret compares against any active round (rotation grace).
+func verifyM2MSecret(rounds []string, secret string) bool {
+	for _, round := range rounds {
+		if bcrypt.CompareHashAndPassword([]byte(round), []byte(secret)) == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *API) issueM2MToken(ctx context.Context, span trace.Span, clientID string, client *dynamo.MachineClientItem, now time.Time, logger *slog.Logger) (PostLoginV1M2mTokensResponseObject, error) {
+	// Mint first so a transient DDB failure on the non-security clear cannot
+	// 500 a valid credential.
 	signed, err := a.machineTokenSigner.Sign(clientID, client.Audience, client.Scopes)
 	if err != nil {
 		span.RecordError(err)
@@ -158,9 +171,7 @@ func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTo
 		}, nil
 	}
 
-	// Success clears failures + any lockout. Failure here is non-fatal: the
-	// token is already minted and valid, and the next success retries the
-	// clear. Failing to clear is fail-closed (safe), just retried.
+	// Non-fatal clear: token already valid, next success retries.
 	if err := a.m2mStore.ResetFailures(ctx, clientID, now); err != nil {
 		span.RecordError(err)
 		logger.Error("failed to reset m2m failures", slog.String("clientId", clientID), slog.String("error", err.Error()))

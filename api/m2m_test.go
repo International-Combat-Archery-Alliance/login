@@ -29,6 +29,7 @@ type fakeM2MStore struct {
 	resetFailErr  error
 	failures      int
 	resets        int
+	bumps         int
 }
 
 func (f *fakeM2MStore) GetClient(ctx context.Context, clientID string) (*dynamo.MachineClientItem, error) {
@@ -39,6 +40,7 @@ func (f *fakeM2MStore) GetClient(ctx context.Context, clientID string) (*dynamo.
 }
 
 func (f *fakeM2MStore) BumpWindow(ctx context.Context, clientID string, now time.Time) (*dynamo.RateWindow, error) {
+	f.bumps++
 	return f.window, nil
 }
 
@@ -174,8 +176,12 @@ func TestPostLoginV1M2mTokensUnknownClient(t *testing.T) {
 	if _, ok := resp.(PostLoginV1M2mTokens401JSONResponse); !ok {
 		t.Fatalf("expected 401 response, got %T", resp)
 	}
-	if store.failures != 1 {
-		t.Fatalf("expected 1 recorded failure, got %d", store.failures)
+	// Unknown IDs never create RATE# items: no bump, no failure record.
+	if store.bumps != 0 {
+		t.Fatalf("unknown client must not bump window, got %d", store.bumps)
+	}
+	if store.failures != 0 {
+		t.Fatalf("unknown client must not record failure, got %d", store.failures)
 	}
 }
 
@@ -193,6 +199,9 @@ func TestPostLoginV1M2mTokensInactiveClient(t *testing.T) {
 	}
 	if _, ok := resp.(PostLoginV1M2mTokens401JSONResponse); !ok {
 		t.Fatalf("expected 401 response for inactive client, got %T", resp)
+	}
+	if store.bumps != 0 || store.failures != 0 {
+		t.Fatalf("inactive client must not touch limiter (bumps=%d failures=%d)", store.bumps, store.failures)
 	}
 }
 
@@ -216,7 +225,9 @@ func TestPostLoginV1M2mTokensRotationGraceWindow(t *testing.T) {
 	}
 }
 
-func TestPostLoginV1M2mTokensLockedOut(t *testing.T) {
+func TestPostLoginV1M2mTokensLockedValidBypass(t *testing.T) {
+	// Valid secret while locked bypasses and clears: victim cannot be starved
+	// by an attacker who knows the clientId.
 	lockedUntil := time.Now().Add(15 * time.Minute)
 	store := &fakeM2MStore{
 		client: testClientItem(testSecret),
@@ -230,11 +241,34 @@ func TestPostLoginV1M2mTokensLockedOut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, ok := resp.(PostLoginV1M2mTokens429JSONResponse); !ok {
-		t.Fatalf("expected 429 while locked out, got %T", resp)
+	if _, ok := resp.(PostLoginV1M2mTokens200JSONResponse); !ok {
+		t.Fatalf("expected 200 valid-bypass while locked, got %T", resp)
 	}
+	if store.resets != 1 {
+		t.Fatalf("expected lock cleared (1 reset), got %d", store.resets)
+	}
+}
+
+func TestPostLoginV1M2mTokensLockedInvalidStays429(t *testing.T) {
+	lockedUntil := time.Now().Add(15 * time.Minute)
+	store := &fakeM2MStore{
+		client: testClientItem(testSecret),
+		window: &dynamo.RateWindow{WindowCount: 1, FailCount: 5, LockedUntil: &lockedUntil},
+	}
+	a, _, _ := testAPI(t, store)
+
+	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
+		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, "wrong-secret")},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := resp.(PostLoginV1M2mTokens429JSONResponse); !ok {
+		t.Fatalf("expected 429 invalid-while-locked, got %T", resp)
+	}
+	// No extension: lock is not sticky under spam.
 	if store.failures != 0 {
-		t.Fatalf("locked requests must not count failures (bcrypt skipped), got %d", store.failures)
+		t.Fatalf("locked invalid must not record failures, got %d", store.failures)
 	}
 }
 
@@ -291,13 +325,18 @@ func TestPostLoginV1M2mTokensBadCredentialsFormat(t *testing.T) {
 }
 
 func TestPostLoginV1M2mTokensRecordFailureErrorStill401(t *testing.T) {
-	// An unknown client is an auth failure regardless of whether the failure
-	// counter could be updated (counter is fail-open, verdict is fail-closed).
-	store := &fakeM2MStore{window: &dynamo.RateWindow{WindowCount: 1}, recordFailErr: errors.New("dynamo down")}
+	// A known client with a wrong secret is an auth failure regardless of
+	// whether the failure counter could be updated (fail-open counter,
+	// fail-closed verdict). Unknown clients never reach the counter.
+	store := &fakeM2MStore{
+		client:        testClientItem(testSecret),
+		window:        &dynamo.RateWindow{WindowCount: 1},
+		recordFailErr: errors.New("dynamo down"),
+	}
 	a, _, _ := testAPI(t, store)
 
 	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader("unknown-client", testSecret)},
+		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, "wrong-secret")},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
