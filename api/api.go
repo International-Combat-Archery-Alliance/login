@@ -12,6 +12,7 @@ import (
 
 	"github.com/International-Combat-Archery-Alliance/auth"
 	"github.com/International-Combat-Archery-Alliance/auth/token"
+	"github.com/International-Combat-Archery-Alliance/login/m2m"
 	"github.com/International-Combat-Archery-Alliance/middleware"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
@@ -29,11 +30,11 @@ type Config struct {
 	GoogleTokenValidator auth.Validator
 	TokenService         *token.TokenService
 	RefreshTokenStore    token.RefreshTokenStore
-	MachineTokenSigner   *token.MachineTokenSigner
+	MachineTokenSigner   m2m.TokenSigner
 	// MachineTokenLifetime must match the lifetime the signer was built with;
 	// zero defaults to token.DefaultMachineTokenLifetime.
 	MachineTokenLifetime time.Duration
-	M2MStore             M2MStore
+	M2MStore             m2m.Store
 	JWKSProvider         JWKSProvider
 	AdminEmails          []string
 	Logger               *slog.Logger
@@ -50,14 +51,10 @@ type API struct {
 	googleTokenValidator auth.Validator
 	tokenService         *token.TokenService
 	refreshTokenStore    token.RefreshTokenStore
-	machineTokenSigner   *token.MachineTokenSigner
-	machineTokenLifetime time.Duration
-	m2mStore             M2MStore
+	m2mService           *m2m.Service
 	jwksProvider         JWKSProvider
 	adminEmails          map[string]bool
 	flushTraces          func(context.Context) error
-	// dummyClientSecretHash equalizes the unknown-client bcrypt timing path.
-	dummyClientSecretHash []byte
 }
 
 func NewAPI(config Config) *API {
@@ -73,19 +70,16 @@ func NewAPI(config Config) *API {
 	}
 
 	return &API{
-		logger:                config.Logger,
-		env:                   config.Environment,
-		tracer:                otel.Tracer("github.com/International-Combat-Archery-Alliance/login/api"),
-		googleTokenValidator:  config.GoogleTokenValidator,
-		tokenService:          config.TokenService,
-		refreshTokenStore:     config.RefreshTokenStore,
-		machineTokenSigner:    config.MachineTokenSigner,
-		machineTokenLifetime:  lifetime,
-		m2mStore:              config.M2MStore,
-		jwksProvider:          config.JWKSProvider,
-		adminEmails:           adminMap,
-		flushTraces:           config.FlushTraces,
-		dummyClientSecretHash: makeDummyClientSecretHash(),
+		logger:               config.Logger,
+		env:                  config.Environment,
+		tracer:               otel.Tracer("github.com/International-Combat-Archery-Alliance/login/api"),
+		googleTokenValidator: config.GoogleTokenValidator,
+		tokenService:         config.TokenService,
+		refreshTokenStore:    config.RefreshTokenStore,
+		m2mService:           m2m.NewService(config.M2MStore, config.MachineTokenSigner, lifetime),
+		jwksProvider:         config.JWKSProvider,
+		adminEmails:          adminMap,
+		flushTraces:          config.FlushTraces,
 	}
 }
 

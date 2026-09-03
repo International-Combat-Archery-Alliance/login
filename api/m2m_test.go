@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/International-Combat-Archery-Alliance/auth/token"
-	"github.com/International-Combat-Archery-Alliance/login/dynamo"
+	"github.com/International-Combat-Archery-Alliance/login/m2m"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -20,10 +20,10 @@ const (
 	testSecret   = "test-secret-value-that-is-longer-than-32-bytes!!"
 )
 
-// fakeM2MStore is an in-memory M2MStore for handler tests.
+// fakeM2MStore is an in-memory m2m.Store for adapter tests.
 type fakeM2MStore struct {
-	client        *dynamo.MachineClientItem
-	window        *dynamo.RateWindow
+	client        *m2m.Client
+	window        *m2m.RateWindow
 	windowLimit   int64
 	recordFailErr error
 	resetFailErr  error
@@ -32,24 +32,24 @@ type fakeM2MStore struct {
 	bumps         int
 }
 
-func (f *fakeM2MStore) GetClient(ctx context.Context, clientID string) (*dynamo.MachineClientItem, error) {
-	if f.client == nil || f.client.PK != dynamo.MachineClientPrefix+clientID {
+func (f *fakeM2MStore) GetClient(ctx context.Context, clientID string) (*m2m.Client, error) {
+	if f.client == nil || f.client.ID != clientID {
 		return nil, nil
 	}
 	return f.client, nil
 }
 
-func (f *fakeM2MStore) BumpWindow(ctx context.Context, clientID string, now time.Time) (*dynamo.RateWindow, error) {
+func (f *fakeM2MStore) BumpWindow(ctx context.Context, clientID string) (*m2m.RateWindow, error) {
 	f.bumps++
 	return f.window, nil
 }
 
-func (f *fakeM2MStore) RecordFailure(ctx context.Context, clientID string, now time.Time) error {
+func (f *fakeM2MStore) RecordFailure(ctx context.Context, clientID string) error {
 	f.failures++
 	return f.recordFailErr
 }
 
-func (f *fakeM2MStore) ResetFailures(ctx context.Context, clientID string, now time.Time) error {
+func (f *fakeM2MStore) ResetFailures(ctx context.Context, clientID string) error {
 	f.resets++
 	return f.resetFailErr
 }
@@ -84,18 +84,14 @@ func testAPI(t *testing.T, store *fakeM2MStore) (*API, *rsa.PrivateKey, *token.M
 	return api, priv, signer
 }
 
-func testClientItem(secret string) *dynamo.MachineClientItem {
-	hash, _ := bcrypt.GenerateFromPassword([]byte(secret), m2mBcryptCost)
-	now := time.Now().UTC()
-	return &dynamo.MachineClientItem{
-		PK:           dynamo.MachineClientPrefix + testClientID,
-		SK:           dynamo.MachineClientPrefix + testClientID,
+func testClientItem(secret string) *m2m.Client {
+	hash, _ := bcrypt.GenerateFromPassword([]byte(secret), m2m.BcryptCost)
+	return &m2m.Client{
+		ID:           testClientID,
 		SecretRounds: []string{string(hash)},
 		Audience:     "profiles-api",
 		Scopes:       []string{"m2m:player-profiles"},
 		Active:       true,
-		CreatedAt:    now,
-		UpdatedAt:    now,
 	}
 }
 
@@ -110,7 +106,7 @@ func b64Std(s string) string {
 func TestPostLoginV1M2mTokensHappyPath(t *testing.T) {
 	store := &fakeM2MStore{
 		client: testClientItem(testSecret),
-		window: &dynamo.RateWindow{WindowCount: 1, FailCount: 0},
+		window: &m2m.RateWindow{WindowCount: 1, FailCount: 0},
 	}
 	a, priv, _ := testAPI(t, store)
 
@@ -134,8 +130,6 @@ func TestPostLoginV1M2mTokensHappyPath(t *testing.T) {
 		t.Fatalf("expected 1 reset, got %d", store.resets)
 	}
 
-	// End-to-end: the issued token verifies against the public key with the
-	// auth lib, with the client's audience + exact scope enforced.
 	claims, err := validateWithTestCache(t, priv, tokenResp.AccessToken, "profiles-api", "m2m:player-profiles")
 	if err != nil {
 		t.Fatalf("issued token must verify: %v", err)
@@ -146,7 +140,7 @@ func TestPostLoginV1M2mTokensHappyPath(t *testing.T) {
 }
 
 func TestPostLoginV1M2mTokensWrongSecret(t *testing.T) {
-	store := &fakeM2MStore{client: testClientItem(testSecret), window: &dynamo.RateWindow{WindowCount: 1}}
+	store := &fakeM2MStore{client: testClientItem(testSecret), window: &m2m.RateWindow{WindowCount: 1}}
 	a, _, _ := testAPI(t, store)
 
 	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
@@ -164,7 +158,7 @@ func TestPostLoginV1M2mTokensWrongSecret(t *testing.T) {
 }
 
 func TestPostLoginV1M2mTokensUnknownClient(t *testing.T) {
-	store := &fakeM2MStore{window: &dynamo.RateWindow{WindowCount: 1}}
+	store := &fakeM2MStore{window: &m2m.RateWindow{WindowCount: 1}}
 	a, _, _ := testAPI(t, store)
 
 	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
@@ -176,7 +170,6 @@ func TestPostLoginV1M2mTokensUnknownClient(t *testing.T) {
 	if _, ok := resp.(PostLoginV1M2mTokens401JSONResponse); !ok {
 		t.Fatalf("expected 401 response, got %T", resp)
 	}
-	// Unknown IDs never create RATE# items: no bump, no failure record.
 	if store.bumps != 0 {
 		t.Fatalf("unknown client must not bump window, got %d", store.bumps)
 	}
@@ -188,7 +181,7 @@ func TestPostLoginV1M2mTokensUnknownClient(t *testing.T) {
 func TestPostLoginV1M2mTokensInactiveClient(t *testing.T) {
 	client := testClientItem(testSecret)
 	client.Active = false
-	store := &fakeM2MStore{client: client, window: &dynamo.RateWindow{WindowCount: 1}}
+	store := &fakeM2MStore{client: client, window: &m2m.RateWindow{WindowCount: 1}}
 	a, _, _ := testAPI(t, store)
 
 	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
@@ -206,12 +199,10 @@ func TestPostLoginV1M2mTokensInactiveClient(t *testing.T) {
 }
 
 func TestPostLoginV1M2mTokensRotationGraceWindow(t *testing.T) {
-	// Old round + new round in secretRounds[]: both must be accepted until the
-	// old round is removed (rotation grace).
-	hash, _ := bcrypt.GenerateFromPassword([]byte("old-secret-value"), m2mBcryptCost)
+	hash, _ := bcrypt.GenerateFromPassword([]byte("old-secret-value"), m2m.BcryptCost)
 	client := testClientItem(testSecret)
 	client.SecretRounds = []string{string(hash), client.SecretRounds[0]}
-	store := &fakeM2MStore{client: client, window: &dynamo.RateWindow{WindowCount: 1}}
+	store := &fakeM2MStore{client: client, window: &m2m.RateWindow{WindowCount: 1}}
 	a, _, _ := testAPI(t, store)
 
 	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
@@ -226,12 +217,10 @@ func TestPostLoginV1M2mTokensRotationGraceWindow(t *testing.T) {
 }
 
 func TestPostLoginV1M2mTokensLockedValidBypass(t *testing.T) {
-	// Valid secret while locked bypasses and clears: victim cannot be starved
-	// by an attacker who knows the clientId.
 	lockedUntil := time.Now().Add(15 * time.Minute)
 	store := &fakeM2MStore{
 		client: testClientItem(testSecret),
-		window: &dynamo.RateWindow{WindowCount: 1, FailCount: 5, LockedUntil: &lockedUntil},
+		window: &m2m.RateWindow{WindowCount: 1, FailCount: 5, LockedUntil: &lockedUntil},
 	}
 	a, _, _ := testAPI(t, store)
 
@@ -253,7 +242,7 @@ func TestPostLoginV1M2mTokensLockedInvalidStays429(t *testing.T) {
 	lockedUntil := time.Now().Add(15 * time.Minute)
 	store := &fakeM2MStore{
 		client: testClientItem(testSecret),
-		window: &dynamo.RateWindow{WindowCount: 1, FailCount: 5, LockedUntil: &lockedUntil},
+		window: &m2m.RateWindow{WindowCount: 1, FailCount: 5, LockedUntil: &lockedUntil},
 	}
 	a, _, _ := testAPI(t, store)
 
@@ -266,7 +255,6 @@ func TestPostLoginV1M2mTokensLockedInvalidStays429(t *testing.T) {
 	if _, ok := resp.(PostLoginV1M2mTokens429JSONResponse); !ok {
 		t.Fatalf("expected 429 invalid-while-locked, got %T", resp)
 	}
-	// No extension: lock is not sticky under spam.
 	if store.failures != 0 {
 		t.Fatalf("locked invalid must not record failures, got %d", store.failures)
 	}
@@ -275,7 +263,7 @@ func TestPostLoginV1M2mTokensLockedInvalidStays429(t *testing.T) {
 func TestPostLoginV1M2mTokensWindowExceeded(t *testing.T) {
 	store := &fakeM2MStore{
 		client:      testClientItem(testSecret),
-		window:      &dynamo.RateWindow{WindowCount: 31},
+		window:      &m2m.RateWindow{WindowCount: 31},
 		windowLimit: 30,
 	}
 	a, _, _ := testAPI(t, store)
@@ -292,7 +280,7 @@ func TestPostLoginV1M2mTokensWindowExceeded(t *testing.T) {
 }
 
 func TestPostLoginV1M2mTokensBadCredentialsFormat(t *testing.T) {
-	store := &fakeM2MStore{window: &dynamo.RateWindow{WindowCount: 1}}
+	store := &fakeM2MStore{window: &m2m.RateWindow{WindowCount: 1}}
 	a, _, _ := testAPI(t, store)
 
 	tests := []struct {
@@ -325,12 +313,9 @@ func TestPostLoginV1M2mTokensBadCredentialsFormat(t *testing.T) {
 }
 
 func TestPostLoginV1M2mTokensRecordFailureErrorStill401(t *testing.T) {
-	// A known client with a wrong secret is an auth failure regardless of
-	// whether the failure counter could be updated (fail-open counter,
-	// fail-closed verdict). Unknown clients never reach the counter.
 	store := &fakeM2MStore{
 		client:        testClientItem(testSecret),
-		window:        &dynamo.RateWindow{WindowCount: 1},
+		window:        &m2m.RateWindow{WindowCount: 1},
 		recordFailErr: errors.New("dynamo down"),
 	}
 	a, _, _ := testAPI(t, store)
@@ -347,11 +332,9 @@ func TestPostLoginV1M2mTokensRecordFailureErrorStill401(t *testing.T) {
 }
 
 func TestPostLoginV1M2mTokensResetFailureStill200(t *testing.T) {
-	// ResetFailures is a non-security clear: a transient DDB failure must not
-	// 500 a valid credential. Token is still minted; the next success retries.
 	store := &fakeM2MStore{
 		client:       testClientItem(testSecret),
-		window:       &dynamo.RateWindow{WindowCount: 1},
+		window:       &m2m.RateWindow{WindowCount: 1},
 		resetFailErr: errors.New("dynamo down"),
 	}
 	a, _, _ := testAPI(t, store)
@@ -383,7 +366,7 @@ func TestPostLoginV1M2mTokensExpiresInMatchesLifetime(t *testing.T) {
 		MachineTokenLifetime: 10 * time.Minute,
 		M2MStore: &fakeM2MStore{
 			client: testClientItem(testSecret),
-			window: &dynamo.RateWindow{WindowCount: 1},
+			window: &m2m.RateWindow{WindowCount: 1},
 		},
 		JWKSProvider: fakeJWKSProvider{jwks: JWKS{Keys: []JWK{}}},
 		Logger:       slog.New(slog.DiscardHandler),

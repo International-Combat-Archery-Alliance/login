@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/International-Combat-Archery-Alliance/login/m2m"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -30,9 +31,8 @@ const (
 	DefaultM2MLockoutDuration  = 15 * time.Minute
 )
 
-// MachineClientItem is the CLIENT#<clientId> record in the login-api table.
-// secretRounds is an array so rotation keeps a grace window: keep the previous
-// round until all callers have recycled, then drop it.
+// MachineClientItem is the CLIENT#<clientId> persistence record. Mapped to
+// m2m.Client on read; rotation keeps prior rounds until callers recycle.
 type MachineClientItem struct {
 	PK           string    `dynamodbav:"PK"`
 	SK           string    `dynamodbav:"SK"`
@@ -44,13 +44,7 @@ type MachineClientItem struct {
 	UpdatedAt    time.Time `dynamodbav:"updatedAt"`
 }
 
-// RateWindow is the state of a client's current fixed window, returned by
-// BumpWindow (ALL_NEW attributes of the RATE#<clientId> item).
-type RateWindow struct {
-	WindowCount int64
-	FailCount   int64
-	LockedUntil *time.Time
-}
+var _ m2m.Store = (*M2MStore)(nil)
 
 // rateItem mirrors the RATE# item attributes for SDK unmarshalling. lockedUntil
 // and windowEnd are stored as Unix epochs (numbers) so DynamoDB conditions can
@@ -75,6 +69,7 @@ type M2MStore struct {
 	windowDuration   time.Duration
 	lockoutThreshold int64
 	lockoutDuration  time.Duration
+	clock            m2m.Clock
 }
 
 // M2MStoreOption configures an M2MStore.
@@ -91,6 +86,11 @@ func WithM2MLockoutThreshold(n int) M2MStoreOption {
 	return func(s *M2MStore) { s.lockoutThreshold = int64(n) }
 }
 
+// WithClock overrides the clock (tests).
+func WithClock(c m2m.Clock) M2MStoreOption {
+	return func(s *M2MStore) { s.clock = c }
+}
+
 // NewM2MStore creates the m2m credential + rate-limit store.
 func NewM2MStore(client *dynamodb.Client, tableName string, opts ...M2MStoreOption) *M2MStore {
 	s := &M2MStore{
@@ -100,6 +100,7 @@ func NewM2MStore(client *dynamodb.Client, tableName string, opts ...M2MStoreOpti
 		windowDuration:   DefaultM2MWindowDuration,
 		lockoutThreshold: DefaultM2MLockoutThreshold,
 		lockoutDuration:  DefaultM2MLockoutDuration,
+		clock:            m2m.SystemClock(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -114,7 +115,7 @@ func (s *M2MStore) WindowLimit() int64 {
 
 // GetClient fetches the CLIENT#<clientId> record. Returns (nil, nil) when the
 // item does not exist.
-func (s *M2MStore) GetClient(ctx context.Context, clientID string) (*MachineClientItem, error) {
+func (s *M2MStore) GetClient(ctx context.Context, clientID string) (*m2m.Client, error) {
 	result, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.tableName),
 		Key:       machineClientKey(clientID),
@@ -130,7 +131,13 @@ func (s *M2MStore) GetClient(ctx context.Context, clientID string) (*MachineClie
 	if err := attributevalue.UnmarshalMap(result.Item, &item); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal machine client %q: %w", clientID, err)
 	}
-	return &item, nil
+	return &m2m.Client{
+		ID:           clientID,
+		SecretRounds: item.SecretRounds,
+		Audience:     item.Audience,
+		Scopes:       item.Scopes,
+		Active:       item.Active,
+	}, nil
 }
 
 // BumpWindow increments windowCount for the current fixed window and returns
@@ -141,7 +148,8 @@ func (s *M2MStore) GetClient(ctx context.Context, clientID string) (*MachineClie
 // windowCount resets to 1 and failCount to 0. lockedUntil is never reset by a
 // window rollover. ttl is only ever set when missing (or extended by the
 // lockout path); correctness does not depend on DynamoDB TTL deletion.
-func (s *M2MStore) BumpWindow(ctx context.Context, clientID string, now time.Time) (*RateWindow, error) {
+func (s *M2MStore) BumpWindow(ctx context.Context, clientID string) (*m2m.RateWindow, error) {
+	now := s.clock.Now()
 	newWindowEnd := now.Add(s.windowDuration).Unix()
 
 	// Start-or-rollover: succeeds only when the item is absent, has no
@@ -192,8 +200,8 @@ func (s *M2MStore) BumpWindow(ctx context.Context, clientID string, now time.Tim
 }
 
 // rateWindowFromAttributes unmarshals the ALL_NEW attributes of a RATE# item
-// into a RateWindow.
-func rateWindowFromAttributes(attrs map[string]types.AttributeValue, clientID string) (*RateWindow, error) {
+// into a core RateWindow.
+func rateWindowFromAttributes(attrs map[string]types.AttributeValue, clientID string) (*m2m.RateWindow, error) {
 	var item rateItem
 	if err := attributevalue.UnmarshalMap(attrs, &item); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal m2m rate window for %q: %w", clientID, err)
@@ -203,7 +211,7 @@ func rateWindowFromAttributes(attrs map[string]types.AttributeValue, clientID st
 		t := time.Unix(item.LockedUntilUnix, 0).UTC()
 		lockedUntil = &t
 	}
-	return &RateWindow{
+	return &m2m.RateWindow{
 		WindowCount: item.WindowCount,
 		FailCount:   item.FailCount,
 		LockedUntil: lockedUntil,
@@ -216,7 +224,8 @@ func rateWindowFromAttributes(attrs map[string]types.AttributeValue, clientID st
 // lock SET is conditional, so only one wins.
 //
 // ttl is only set when a lock is written; the fail ADD never touches ttl.
-func (s *M2MStore) RecordFailure(ctx context.Context, clientID string, now time.Time) error {
+func (s *M2MStore) RecordFailure(ctx context.Context, clientID string) error {
+	now := s.clock.Now()
 	out, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:        aws.String(s.tableName),
 		Key:              rateLimitKey(clientID),
@@ -264,8 +273,8 @@ func (s *M2MStore) RecordFailure(ctx context.Context, clientID string, now time.
 
 // ResetFailures sets failCount to zero and removes lockedUntil, leaving
 // windowCount untouched. ttl is set to now+windowDuration.
-func (s *M2MStore) ResetFailures(ctx context.Context, clientID string, now time.Time) error {
-	windowEnd := now.Add(s.windowDuration)
+func (s *M2MStore) ResetFailures(ctx context.Context, clientID string) error {
+	windowEnd := s.clock.Now().Add(s.windowDuration)
 
 	_, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:        aws.String(s.tableName),

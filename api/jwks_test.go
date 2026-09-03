@@ -5,11 +5,11 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/International-Combat-Archery-Alliance/login/dynamo"
+	"github.com/International-Combat-Archery-Alliance/login/m2m"
 )
 
 func TestGetLoginWellKnownJwksJson(t *testing.T) {
-	store := &fakeM2MStore{window: &dynamo.RateWindow{WindowCount: 1}}
+	store := &fakeM2MStore{window: &m2m.RateWindow{WindowCount: 1}}
 	a, _, _ := testAPI(t, store)
 	a.jwksProvider = fakeJWKSProvider{jwks: JWKS{
 		Keys: []JWK{{
@@ -37,7 +37,7 @@ func TestGetLoginWellKnownJwksJson(t *testing.T) {
 }
 
 func TestGetLoginWellKnownJwksJsonProviderFailure(t *testing.T) {
-	store := &fakeM2MStore{window: &dynamo.RateWindow{WindowCount: 1}}
+	store := &fakeM2MStore{window: &m2m.RateWindow{WindowCount: 1}}
 	a, _, _ := testAPI(t, store)
 	a.jwksProvider = failingJWKSProvider{}
 

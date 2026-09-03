@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/International-Combat-Archery-Alliance/login/m2m"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -23,9 +24,9 @@ type fakeDDB struct {
 	mu sync.Mutex
 
 	// Per UpdateItem call (in order):
-	condFail []bool                          // return ConditionalCheckFailedException
-	results []*dynamodb.UpdateItemOutput     // Attributes to return (when not condFail)
-	errs    []error                          // generic error to return (overrides both)
+	condFail []bool                       // return ConditionalCheckFailedException
+	results  []*dynamodb.UpdateItemOutput // Attributes to return (when not condFail)
+	errs     []error                      // generic error to return (overrides both)
 
 	calls []*dynamodb.UpdateItemInput
 }
@@ -83,9 +84,26 @@ func attrs(t *testing.T, item rateItem) map[string]types.AttributeValue {
 	return m
 }
 
-func newTestStore(t *testing.T, f *fakeDDB) *M2MStore {
+type manualClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *manualClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *manualClock) Set(t time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = t
+}
+
+func newTestStore(t *testing.T, f *fakeDDB, clock m2m.Clock) *M2MStore {
 	t.Helper()
-	return NewM2MStore(f.client(), "login-api-table")
+	return NewM2MStore(f.client(), "login-api-table", WithClock(clock))
 }
 
 func num(t *testing.T, v types.AttributeValue, name string) string {
@@ -99,6 +117,8 @@ func num(t *testing.T, v types.AttributeValue, name string) string {
 
 func TestBumpWindowStartsFreshWindow(t *testing.T) {
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	clock := &manualClock{}
+	clock.Set(now)
 	f := newFakeDDB()
 	f.results = []*dynamodb.UpdateItemOutput{
 		{Attributes: attrs(t, rateItem{
@@ -108,9 +128,9 @@ func TestBumpWindowStartsFreshWindow(t *testing.T) {
 			TTL:         now.Add(time.Minute).Unix(),
 		})},
 	}
-	store := newTestStore(t, f)
+	store := newTestStore(t, f, clock)
 
-	w, err := store.BumpWindow(context.Background(), "client-1", now)
+	w, err := store.BumpWindow(context.Background(), "client-1")
 	if err != nil {
 		t.Fatalf("BumpWindow: %v", err)
 	}
@@ -145,6 +165,8 @@ func TestBumpWindowStartsFreshWindow(t *testing.T) {
 
 func TestBumpWindowCountsWithinActiveWindow(t *testing.T) {
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	clock := &manualClock{}
+	clock.Set(now)
 	f := newFakeDDB()
 	// Active window: the start-or-rollover attempt fails its condition, then
 	// the in-window ADD succeeds.
@@ -158,9 +180,10 @@ func TestBumpWindowCountsWithinActiveWindow(t *testing.T) {
 			TTL:         now.Add(time.Minute).Unix(),
 		})},
 	}
-	store := newTestStore(t, f)
+	store := newTestStore(t, f, clock)
 
-	w, err := store.BumpWindow(context.Background(), "client-1", now.Add(30*time.Second))
+	clock.Set(now.Add(30 * time.Second))
+	w, err := store.BumpWindow(context.Background(), "client-1")
 	if err != nil {
 		t.Fatalf("BumpWindow: %v", err)
 	}
@@ -182,6 +205,8 @@ func TestBumpWindowCountsWithinActiveWindow(t *testing.T) {
 
 func TestBumpWindowRollsOverWhenWindowEnded(t *testing.T) {
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	clock := &manualClock{}
+	clock.Set(now)
 	f := newFakeDDB()
 	// First call (t0) starts the window; second call (t0+90s) hits the
 	// rollover path — both succeed with a fresh window.
@@ -199,14 +224,15 @@ func TestBumpWindowRollsOverWhenWindowEnded(t *testing.T) {
 			TTL:         now.Add(2 * time.Minute).Unix(),
 		})},
 	}
-	store := newTestStore(t, f)
+	store := newTestStore(t, f, clock)
 
 	// First request at t0 (window [0, 60s)), then a request at t0+90s: the
 	// window must have rolled over.
-	if _, err := store.BumpWindow(context.Background(), "client-1", now); err != nil {
+	if _, err := store.BumpWindow(context.Background(), "client-1"); err != nil {
 		t.Fatalf("BumpWindow(1): %v", err)
 	}
-	w, err := store.BumpWindow(context.Background(), "client-1", now.Add(90*time.Second))
+	clock.Set(now.Add(90 * time.Second))
+	w, err := store.BumpWindow(context.Background(), "client-1")
 	if err != nil {
 		t.Fatalf("BumpWindow(2): %v", err)
 	}
@@ -223,6 +249,8 @@ func TestBumpWindowRollsOverWhenWindowEnded(t *testing.T) {
 
 func TestBumpWindowPreservesLockoutAcrossRollover(t *testing.T) {
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	clock := &manualClock{}
+	clock.Set(now)
 	f := newFakeDDB()
 	// Window ended while the client is still locked: rollover must not clear
 	// the lockout.
@@ -235,9 +263,10 @@ func TestBumpWindowPreservesLockoutAcrossRollover(t *testing.T) {
 			TTL:             now.Add(15*time.Minute + 5*time.Second).Unix(),
 		})},
 	}
-	store := newTestStore(t, f)
+	store := newTestStore(t, f, clock)
 
-	w, err := store.BumpWindow(context.Background(), "client-1", now.Add(2*time.Minute))
+	clock.Set(now.Add(2 * time.Minute))
+	w, err := store.BumpWindow(context.Background(), "client-1")
 	if err != nil {
 		t.Fatalf("BumpWindow: %v", err)
 	}
@@ -258,24 +287,28 @@ func TestBumpWindowPreservesLockoutAcrossRollover(t *testing.T) {
 
 func TestBumpWindowErrorPropagates(t *testing.T) {
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	clock := &manualClock{}
+	clock.Set(now)
 	f := newFakeDDB()
 	f.errs = []error{fmt.Errorf("db is on fire")}
-	store := newTestStore(t, f)
+	store := newTestStore(t, f, clock)
 
-	if _, err := store.BumpWindow(context.Background(), "client-1", now); err == nil {
+	if _, err := store.BumpWindow(context.Background(), "client-1"); err == nil {
 		t.Fatal("expected error, got nil")
 	}
 }
 
 func TestRecordFailureBelowThreshold(t *testing.T) {
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	clock := &manualClock{}
+	clock.Set(now)
 	f := newFakeDDB()
 	f.results = []*dynamodb.UpdateItemOutput{
 		{Attributes: attrs(t, rateItem{WindowCount: 1, FailCount: 4, WindowEnd: now.Add(time.Minute).Unix()})},
 	}
-	store := newTestStore(t, f)
+	store := newTestStore(t, f, clock)
 
-	if err := store.RecordFailure(context.Background(), "client-1", now); err != nil {
+	if err := store.RecordFailure(context.Background(), "client-1"); err != nil {
 		t.Fatalf("RecordFailure: %v", err)
 	}
 	if len(f.calls) != 1 {
@@ -288,6 +321,8 @@ func TestRecordFailureBelowThreshold(t *testing.T) {
 
 func TestRecordFailureLocksAtThreshold(t *testing.T) {
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	clock := &manualClock{}
+	clock.Set(now)
 	f := newFakeDDB()
 	f.results = []*dynamodb.UpdateItemOutput{
 		// ADD failCount lands at the threshold...
@@ -301,9 +336,9 @@ func TestRecordFailureLocksAtThreshold(t *testing.T) {
 			TTL:             now.Add(15*time.Minute + 5*time.Second).Unix(),
 		})},
 	}
-	store := newTestStore(t, f)
+	store := newTestStore(t, f, clock)
 
-	if err := store.RecordFailure(context.Background(), "client-1", now); err != nil {
+	if err := store.RecordFailure(context.Background(), "client-1"); err != nil {
 		t.Fatalf("RecordFailure: %v", err)
 	}
 	if len(f.calls) != 2 {
@@ -329,13 +364,15 @@ func TestRecordFailureLocksAtThreshold(t *testing.T) {
 
 func TestResetFailuresClearsLockAndFailures(t *testing.T) {
 	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	clock := &manualClock{}
+	clock.Set(now)
 	f := newFakeDDB()
 	f.results = []*dynamodb.UpdateItemOutput{
 		{Attributes: attrs(t, rateItem{WindowCount: 1, FailCount: 0, WindowEnd: now.Add(time.Minute).Unix(), TTL: now.Add(time.Minute).Unix()})},
 	}
-	store := newTestStore(t, f)
+	store := newTestStore(t, f, clock)
 
-	if err := store.ResetFailures(context.Background(), "client-1", now); err != nil {
+	if err := store.ResetFailures(context.Background(), "client-1"); err != nil {
 		t.Fatalf("ResetFailures: %v", err)
 	}
 	if len(f.calls) != 1 {
