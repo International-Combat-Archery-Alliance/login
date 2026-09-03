@@ -68,9 +68,10 @@ paths:
                 $ref: '#/components/schemas/Error'
     delete:
       summary: Logs the user out
-      description: For cookie based auth, deletes the cookies and revokes the refresh token, effectively logging the user out.
+      description: Deletes the cookies and revokes the refresh token when its cookie is presented, effectively logging the user out.
       security:
         - icaaCookieAuth: []
+        - icaaRefreshCookieAuth: []
       responses:
         '200':
           description: User logged out
