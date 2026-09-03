@@ -59,8 +59,7 @@ func testClient(secret string) *Client {
 	return &Client{
 		ID:           "event-registration",
 		SecretRounds: []string{string(hash)},
-		Audience:     "profiles-api",
-		Scopes:       []string{"m2m:player-profiles"},
+		Audiences:    map[string][]string{"profiles-api": {"m2m:player-profiles"}},
 		Active:       true,
 	}
 }
@@ -72,7 +71,7 @@ func TestExchangeHappyPath(t *testing.T) {
 	signer := &fakeSigner{signed: "jwt"}
 	svc := NewService(store, signer, 5*time.Minute)
 
-	signed, err := svc.Exchange(context.Background(), "event-registration", "secret", testLogger())
+	signed, err := svc.Exchange(context.Background(), "event-registration", "secret", "profiles-api", testLogger())
 	if err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
@@ -88,7 +87,7 @@ func TestExchangeUnknownNoWrites(t *testing.T) {
 	store := &fakeStore{window: &RateWindow{WindowCount: 1}}
 	svc := NewService(store, &fakeSigner{signed: "x"}, 5*time.Minute)
 
-	if _, err := svc.Exchange(context.Background(), "nope", "secret", testLogger()); !errors.Is(err, ErrInvalidCredentials) {
+	if _, err := svc.Exchange(context.Background(), "nope", "secret", "profiles-api", testLogger()); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
 	}
 	if store.bumps != 0 {
@@ -100,7 +99,7 @@ func TestExchangeWrongSecret(t *testing.T) {
 	store := &fakeStore{client: testClient("secret"), window: &RateWindow{WindowCount: 1}}
 	svc := NewService(store, &fakeSigner{signed: "jwt"}, 5*time.Minute)
 
-	if _, err := svc.Exchange(context.Background(), "event-registration", "bad", testLogger()); !errors.Is(err, ErrInvalidCredentials) {
+	if _, err := svc.Exchange(context.Background(), "event-registration", "bad", "profiles-api", testLogger()); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
 	}
 }
@@ -113,7 +112,7 @@ func TestExchangeRateLimited(t *testing.T) {
 	}
 	svc := NewService(store, &fakeSigner{signed: "jwt"}, 5*time.Minute)
 
-	if _, err := svc.Exchange(context.Background(), "event-registration", "secret", testLogger()); !errors.Is(err, ErrRateLimited) {
+	if _, err := svc.Exchange(context.Background(), "event-registration", "secret", "profiles-api", testLogger()); !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("expected ErrRateLimited, got %v", err)
 	}
 }
@@ -122,7 +121,32 @@ func TestExchangeBumpError(t *testing.T) {
 	store := &fakeStore{client: testClient("secret"), bumpErr: errors.New("ddb down")}
 	svc := NewService(store, &fakeSigner{signed: "jwt"}, 5*time.Minute)
 
-	if _, err := svc.Exchange(context.Background(), "event-registration", "secret", testLogger()); err == nil {
+	if _, err := svc.Exchange(context.Background(), "event-registration", "secret", "profiles-api", testLogger()); err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+func TestExchangeUnprovisionedAudience(t *testing.T) {
+	store := &fakeStore{client: testClient("secret"), window: &RateWindow{WindowCount: 1}}
+	svc := NewService(store, &fakeSigner{signed: "jwt"}, 5*time.Minute)
+
+	// Correct secret, wrong audience: uniform invalid_client family, and the
+	// limiter was already bumped (same observable shape as a bad secret).
+	if _, err := svc.Exchange(context.Background(), "event-registration", "secret", "other-api", testLogger()); !errors.Is(err, ErrAudienceNotAllowed) {
+		t.Fatalf("expected ErrAudienceNotAllowed, got %v", err)
+	}
+	if store.bumps != 1 {
+		t.Fatalf("membership check runs after the limiter (bumps=%d)", store.bumps)
+	}
+}
+
+func TestExchangeEmptyAudiences(t *testing.T) {
+	client := testClient("secret")
+	client.Audiences = nil
+	store := &fakeStore{client: client, window: &RateWindow{WindowCount: 1}}
+	svc := NewService(store, &fakeSigner{signed: "jwt"}, 5*time.Minute)
+
+	if _, err := svc.Exchange(context.Background(), "event-registration", "secret", "profiles-api", testLogger()); !errors.Is(err, ErrAudienceNotAllowed) {
+		t.Fatalf("expected ErrAudienceNotAllowed, got %v", err)
 	}
 }

@@ -53,7 +53,18 @@ func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTo
 		}, nil
 	}
 
-	signed, err := a.m2mService.Exchange(ctx, clientID, clientSecret, logger)
+	// The requested audience is caller-chosen but allowlisted: it must be
+	// well-formed (400) and provisioned for the client (401, uniform with a
+	// bad secret so the provisioned set is never oracle-able).
+	audience := request.Params.Audience
+	if err := m2m.ValidateAudience(audience); err != nil {
+		return PostLoginV1M2mTokens400JSONResponse{
+			Message: err.Error(),
+			Code:    InputValidationError,
+		}, nil
+	}
+
+	signed, err := a.m2mService.Exchange(ctx, clientID, clientSecret, audience, logger)
 	if err == nil {
 		return PostLoginV1M2mTokens200JSONResponse{
 			AccessToken: signed,
@@ -63,7 +74,7 @@ func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTo
 	}
 
 	switch {
-	case errors.Is(err, m2m.ErrInvalidCredentials):
+	case errors.Is(err, m2m.ErrInvalidCredentials), errors.Is(err, m2m.ErrAudienceNotAllowed):
 		return PostLoginV1M2mTokens401JSONResponse{
 			Message: "invalid client credentials",
 			Code:    AuthError,

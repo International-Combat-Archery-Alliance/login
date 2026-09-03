@@ -74,8 +74,7 @@ func testClientItem(secret string) *m2m.Client {
 	return &m2m.Client{
 		ID:           testClientID,
 		SecretRounds: []string{string(hash)},
-		Audience:     "profiles-api",
-		Scopes:       []string{"m2m:player-profiles"},
+		Audiences:    map[string][]string{"profiles-api": {"m2m:player-profiles"}},
 		Active:       true,
 	}
 }
@@ -96,7 +95,7 @@ func TestPostLoginV1M2mTokensHappyPath(t *testing.T) {
 	a, priv, _ := testAPI(t, store)
 
 	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret)},
+		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret), Audience: "profiles-api"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -129,7 +128,7 @@ func TestPostLoginV1M2mTokensWrongSecret(t *testing.T) {
 	a, _, _ := testAPI(t, store)
 
 	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, "wrong-secret")},
+		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, "wrong-secret"), Audience: "profiles-api"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -144,7 +143,7 @@ func TestPostLoginV1M2mTokensUnknownClient(t *testing.T) {
 	a, _, _ := testAPI(t, store)
 
 	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader("unknown-client", testSecret)},
+		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader("unknown-client", testSecret), Audience: "profiles-api"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -164,7 +163,7 @@ func TestPostLoginV1M2mTokensInactiveClient(t *testing.T) {
 	a, _, _ := testAPI(t, store)
 
 	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret)},
+		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret), Audience: "profiles-api"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -185,7 +184,7 @@ func TestPostLoginV1M2mTokensRotationGraceWindow(t *testing.T) {
 	a, _, _ := testAPI(t, store)
 
 	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, "old-secret-value")},
+		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, "old-secret-value"), Audience: "profiles-api"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -204,7 +203,7 @@ func TestPostLoginV1M2mTokensWindowExceeded(t *testing.T) {
 	a, _, _ := testAPI(t, store)
 
 	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret)},
+		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret), Audience: "profiles-api"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -235,7 +234,7 @@ func TestPostLoginV1M2mTokensBadCredentialsFormat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-				Params: PostLoginV1M2mTokensParams{Authorization: tt.header},
+				Params: PostLoginV1M2mTokensParams{Authorization: tt.header, Audience: "profiles-api"},
 			})
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -271,7 +270,7 @@ func TestPostLoginV1M2mTokensExpiresInMatchesLifetime(t *testing.T) {
 	})
 
 	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret)},
+		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret), Audience: "profiles-api"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -294,4 +293,80 @@ func validateWithTestCache(t *testing.T, priv *rsa.PrivateKey, tokenString, audi
 		token.WithDevKeys(map[string]*rsa.PublicKey{"machine-test": &priv.PublicKey}),
 	)
 	return cache.ValidateMachineToken(context.Background(), tokenString, audience, scope)
+}
+
+func TestPostLoginV1M2mTokensBadAudienceFormat(t *testing.T) {
+	store := &fakeM2MStore{client: testClientItem(testSecret), window: &m2m.RateWindow{WindowCount: 1}}
+	a, _, _ := testAPI(t, store)
+
+	for _, aud := range []string{"", "Bad Aud!", "Profiles-api", "profiles/api"} {
+		resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
+			Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret), Audience: aud},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if _, ok := resp.(PostLoginV1M2mTokens400JSONResponse); !ok {
+			t.Fatalf("audience %q: expected 400 response, got %T", aud, resp)
+		}
+	}
+}
+
+func TestPostLoginV1M2mTokensUnprovisionedAudience(t *testing.T) {
+	store := &fakeM2MStore{client: testClientItem(testSecret), window: &m2m.RateWindow{WindowCount: 1}}
+	a, _, _ := testAPI(t, store)
+
+	// Correct secret, audience outside the provisioned map: uniform 401, no
+	// hint that the client exists or which audiences it holds.
+	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
+		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret), Audience: "other-api"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	denied, ok := resp.(PostLoginV1M2mTokens401JSONResponse)
+	if !ok {
+		t.Fatalf("expected 401 response, got %T", resp)
+	}
+	if denied.Code != AuthError || denied.Message != "invalid client credentials" {
+		t.Fatalf("membership failure must look exactly like bad credentials: %+v", denied)
+	}
+}
+
+func TestPostLoginV1M2mTokensPerAudienceScopes(t *testing.T) {
+	hash, _ := bcrypt.GenerateFromPassword([]byte(testSecret), m2m.BcryptCost)
+	store := &fakeM2MStore{
+		client: &m2m.Client{
+			ID:           testClientID,
+			SecretRounds: []string{string(hash)},
+			Audiences: map[string][]string{
+				"profiles-api": {"m2m:player-profiles"},
+				"events-api":   {"m2m:events-read"},
+			},
+			Active: true,
+		},
+		window: &m2m.RateWindow{WindowCount: 1},
+	}
+	a, priv, _ := testAPI(t, store)
+
+	for aud, scope := range map[string]string{"profiles-api": "m2m:player-profiles", "events-api": "m2m:events-read"} {
+		resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
+			Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret), Audience: aud},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		tokenResp, ok := resp.(PostLoginV1M2mTokens200JSONResponse)
+		if !ok {
+			t.Fatalf("audience %q: expected 200 response, got %T", aud, resp)
+		}
+		if _, err := validateWithTestCache(t, priv, tokenResp.AccessToken, aud, scope); err != nil {
+			t.Fatalf("audience %q: issued token must verify with that entry's scope: %v", aud, err)
+		}
+		// Cross-audience replay is rejected: the profiles token carries only
+		// the profiles scope.
+		if _, err := validateWithTestCache(t, priv, tokenResp.AccessToken, aud, "m2m:other"); err == nil {
+			t.Fatalf("audience %q: token must not verify for another scope", aud)
+		}
+	}
 }

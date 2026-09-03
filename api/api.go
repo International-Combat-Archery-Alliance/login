@@ -53,11 +53,14 @@ type Config struct {
 	// zero defaults to token.DefaultMachineTokenLifetime.
 	MachineTokenLifetime time.Duration
 	M2MStore             m2m.Store
-	JWKSProvider         JWKSProvider
-	AdminEmails          []string
-	Logger               *slog.Logger
-	Environment          Environment
-	FlushTraces          func(context.Context) error
+	// M2MProvisionStore backs the admin provisioning endpoints. Optional:
+	// when nil those endpoints answer 500.
+	M2MProvisionStore m2m.ProvisionStore
+	JWKSProvider      JWKSProvider
+	AdminEmails       []string
+	Logger            *slog.Logger
+	Environment       Environment
+	FlushTraces       func(context.Context) error
 }
 
 var _ StrictServerInterface = (*API)(nil)
@@ -70,6 +73,7 @@ type API struct {
 	userTokens           UserTokens
 	refreshTokenStore    token.RefreshTokenStore
 	m2mService           *m2m.Service
+	provisioner          *m2m.ProvisionService
 	jwksProvider         JWKSProvider
 	adminEmails          map[string]bool
 	flushTraces          func(context.Context) error
@@ -87,6 +91,11 @@ func NewAPI(config Config) *API {
 		lifetime = token.DefaultMachineTokenLifetime
 	}
 
+	var provisioner *m2m.ProvisionService
+	if config.M2MProvisionStore != nil {
+		provisioner = m2m.NewProvisionService(config.M2MProvisionStore)
+	}
+
 	return &API{
 		logger:               config.Logger,
 		env:                  config.Environment,
@@ -95,6 +104,7 @@ func NewAPI(config Config) *API {
 		userTokens:           config.UserTokens,
 		refreshTokenStore:    config.RefreshTokenStore,
 		m2mService:           m2m.NewService(config.M2MStore, config.MachineTokenSigner, lifetime),
+		provisioner:          provisioner,
 		jwksProvider:         config.JWKSProvider,
 		adminEmails:          adminMap,
 		flushTraces:          config.FlushTraces,
