@@ -72,7 +72,10 @@ func setupApi(logger *slog.Logger) (*api.API, func(context.Context) error, error
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	env := getApiEnvironment()
+	env, err := getApiEnvironment()
+	if err != nil {
+		return nil, func(context.Context) error { return nil }, fmt.Errorf("environment: %w", err)
+	}
 
 	// -----------------------------------------------------------------------
 	// Phase 1: New Relic license key → telemetry init (sequential dependency)
@@ -161,12 +164,33 @@ func setupApi(logger *slog.Logger) (*api.API, func(context.Context) error, error
 		token.WithSigningKeys(cfg.JWTSigningKeys, cfg.JWTCurrentKeyID),
 	)
 
+	machineTokenLifetime := token.DefaultMachineTokenLifetime
+	machineTokenSigner, err := token.NewMachineTokenSigner(
+		cfg.MachineSigningKeys,
+		cfg.MachineCurrentKeyID,
+		token.WithMachineTokenLifetime(machineTokenLifetime),
+	)
+	if err != nil {
+		startupSpan.RecordError(err)
+		startupSpan.End()
+		return nil, traceShutdown, fmt.Errorf("machine token signer: %w", err)
+	}
+
 	refreshTokenStore := dynamo.NewDynamoDBRefreshTokenStore(db, dynamoDBTableName)
+	m2mStore := dynamo.NewM2MStore(db, dynamoDBTableName)
+
+	// JWKS serving: the public key set is derived once at startup from the
+	// same signing keys the signer uses. Rotation = SSM edit + redeploy.
+	jwksProvider := staticJWKSProvider{jwks: keypairJWKS(cfg.MachineSigningKeys)}
 
 	loginAPI := api.NewAPI(api.Config{
 		GoogleTokenValidator: googleTokenValidator,
 		TokenService:         tokenService,
 		RefreshTokenStore:    refreshTokenStore,
+		MachineTokenSigner:   machineTokenSigner,
+		MachineTokenLifetime: machineTokenLifetime,
+		M2MStore:             m2mStore,
+		JWKSProvider:         jwksProvider,
 		AdminEmails:          cfg.AdminEmails,
 		Logger:               logger,
 		Environment:          env,

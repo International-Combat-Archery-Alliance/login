@@ -24,7 +24,7 @@ A secure authentication service for the International Combat Archery Alliance (I
 
 ### Prerequisites
 
-- Go 1.24+
+- Go 1.25+
 - AWS SAM CLI (for local development)
 - Docker (for containerized deployment)
 
@@ -60,6 +60,64 @@ Generate OpenAPI code and build the application:
 ```bash
 make build
 ```
+
+## Machine-to-machine auth (ADR-0006)
+
+`POST /login/v1/m2m-tokens` (client-credentials) and
+`GET /login/.well-known/jwks.json` implement service-to-service JWT auth.
+Only `login` ever holds the private signing key; every other service verifies
+with public keys fetched from the JWKS endpoint (derived once at startup from
+the same keys the signer uses; rotation = SSM edit + redeploy).
+
+### Manual SSM provisioning (rotation is a manual step)
+
+Secrets and keypairs are provisioned by hand — login itself has no SSM write
+permissions (rotation = edit the params below, then **redeploy login**: the
+signer and the JWKS endpoint both load keys at startup, so the deploy is what
+publishes a rotated key set).
+
+1. **`/machineJwtSigningKeys`** (SecureString, Advanced tier — a Standard
+   parameter caps at 4 KB and two RSA-2048 keys already exceed it):
+   ```json
+   {
+     "currentKey": "machine-01",
+     "keys": {
+       "machine-01": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+     }
+   }
+   ```
+   Generate with: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048`
+
+2. **`/userJwtSigningKeys`** — same format, `user-*` namespaced kids; reserved
+   for ADR-0007. Not yet read or served by login (JWKS currently serves
+   `machine-*` only); do not provision until ADR-0007 lands.
+
+3. **`/m2m/<clientId>/secret`** (SecureString) — the caller's client secret,
+   **≥ 32 bytes CSPRNG** (e.g. `openssl rand -base64 48`). The caller role
+   (`event-registration`) reads this; login never does.
+
+4. **`CLIENT#<clientId>` item** in the `login-api` DynamoDB table — the bcrypt
+   hash side of the credential, plus the client's allowed audience + scope:
+   ```json
+   {
+     "PK": "CLIENT#event-registration",
+     "SK": "CLIENT#event-registration",
+     "secretRounds": ["$2a$10$..."],
+     "audience": "profiles-api",
+     "scopes": ["m2m:player-profiles"],
+     "active": true,
+     "createdAt": "...",
+     "updatedAt": "..."
+   }
+   ```
+   Hash the secret first: `htpasswd -bnBC 10 "" <secret> | tr -d ':\n'`
+   (cost 10 must match the dummy-compare cost or clientId existence becomes
+   timing-distinguishable; `secretRounds` is an array: keep the previous round
+   until all callers have recycled, then remove it.)
+
+5. **Rate-limit records** (`RATE#<clientId>`) are created automatically by the
+   endpoint; DynamoDB TTL cleans them up (`ttl` is already enabled on the
+   table).
 
 ## Configuration
 

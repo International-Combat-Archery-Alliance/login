@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"strings"
@@ -97,9 +100,11 @@ func getSSMParameters(ctx context.Context, names []string) (map[string]string, e
 }
 
 type AppConfig struct {
-	JWTSigningKeys  map[string]token.SigningKey
-	JWTCurrentKeyID string
-	AdminEmails     []string
+	JWTSigningKeys      map[string]token.SigningKey
+	JWTCurrentKeyID     string
+	MachineSigningKeys  map[string]*rsa.PrivateKey
+	MachineCurrentKeyID string
+	AdminEmails         []string
 }
 
 func fetchAppConfig(ctx context.Context, env api.Environment) (*AppConfig, error) {
@@ -117,18 +122,28 @@ func localAppConfig() (*AppConfig, error) {
 
 	emailsStr := os.Getenv("ADMIN_EMAILS")
 
+	// LOCAL dev keypair for machine tokens: generated ephemeral, explicit
+	// LOCAL env flag (AWS_SAM_LOCAL), never inferred from hostname.
+	machinePriv, _, err := token.GenerateMachineDevKeypair()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate local machine dev keypair: %w", err)
+	}
+
 	return &AppConfig{
 		JWTSigningKeys: map[string]token.SigningKey{
 			"local": {ID: "local", Key: []byte(key)},
 		},
-		JWTCurrentKeyID: "local",
-		AdminEmails:     parseEmailList(emailsStr),
+		JWTCurrentKeyID:     "local",
+		MachineSigningKeys:  map[string]*rsa.PrivateKey{"machine-local": machinePriv},
+		MachineCurrentKeyID: "machine-local",
+		AdminEmails:         parseEmailList(emailsStr),
 	}, nil
 }
 
 func fetchProdAppConfig(ctx context.Context) (*AppConfig, error) {
 	ssmNames := []string{
 		"/jwtSigningKeys",
+		"/machineJwtSigningKeys",
 		"/adminEmails",
 	}
 
@@ -150,6 +165,17 @@ func fetchProdAppConfig(ctx context.Context) (*AppConfig, error) {
 		return nil, fmt.Errorf("missing SSM parameter: /jwtSigningKeys")
 	}
 
+	if v, ok := params["/machineJwtSigningKeys"]; ok {
+		machineKeys, currentKeyID, err := parseRSAJWTSigningKeysJSON(v)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse machine JWT signing keys: %w", err)
+		}
+		cfg.MachineSigningKeys = machineKeys
+		cfg.MachineCurrentKeyID = currentKeyID
+	} else {
+		return nil, fmt.Errorf("missing SSM parameter: /machineJwtSigningKeys")
+	}
+
 	if v, ok := params["/adminEmails"]; ok {
 		cfg.AdminEmails = parseEmailList(v)
 	}
@@ -160,6 +186,56 @@ func fetchProdAppConfig(ctx context.Context) (*AppConfig, error) {
 type jwtSigningKeysData struct {
 	CurrentKey string            `json:"currentKey"`
 	Keys       map[string]string `json:"keys"`
+}
+
+type rsaJWTKeysData struct {
+	CurrentKey string            `json:"currentKey"`
+	Keys       map[string]string `json:"keys"`
+}
+
+// parseRSAJWTSigningKeysJSON parses a keypair parameter of the form
+// {"currentKey": "<kid>", "keys": {"<kid>": "<PEM PKCS#8 RSA private key>"}}.
+func parseRSAJWTSigningKeysJSON(raw string) (map[string]*rsa.PrivateKey, string, error) {
+	var data rsaJWTKeysData
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		return nil, "", fmt.Errorf("failed to parse RSA JWT signing keys JSON: %w", err)
+	}
+
+	keys := make(map[string]*rsa.PrivateKey, len(data.Keys))
+	for kid, keyPEM := range data.Keys {
+		priv, err := parseRSAPrivateKeyPEM(keyPEM)
+		if err != nil {
+			return nil, "", fmt.Errorf("failed to parse private key %q: %w", kid, err)
+		}
+		keys[kid] = priv
+	}
+
+	if _, ok := keys[data.CurrentKey]; !ok {
+		return nil, "", fmt.Errorf("current key ID %q not found in keys", data.CurrentKey)
+	}
+
+	return keys, data.CurrentKey, nil
+}
+
+func parseRSAPrivateKeyPEM(keyPEM string) (*rsa.PrivateKey, error) {
+	block, _ := pem.Decode([]byte(keyPEM))
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found")
+	}
+
+	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		priv, ok := key.(*rsa.PrivateKey)
+		if !ok {
+			return nil, fmt.Errorf("key is not an RSA private key")
+		}
+		return priv, nil
+	}
+
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+
+	return nil, fmt.Errorf("unrecognized private key format")
 }
 
 func parseJWTSigningKeysJSON(raw string) (map[string]token.SigningKey, string, error) {
@@ -206,11 +282,24 @@ func parseEmailList(emailsStr string) []string {
 	return emails
 }
 
-func getApiEnvironment() api.Environment {
+func getApiEnvironment() (api.Environment, error) {
 	if isLocal() {
-		return api.LOCAL
+		// Fail closed: LOCAL mode installs ephemeral dev keys (machine keypair
+		// + static dev JWKS). AWS_SAM_LOCAL is set by `sam local`, never by
+		// the Lambda runtime, so this combination can only be a prod
+		// misconfig — refuse to boot with dev key material instead.
+		if insideLambdaRuntime() {
+			return 0, fmt.Errorf("AWS_SAM_LOCAL=true but running in an AWS Lambda runtime; refusing LOCAL mode")
+		}
+		return api.LOCAL, nil
 	}
-	return api.PROD
+	return api.PROD, nil
+}
+
+// insideLambdaRuntime reports whether the process is running in a real Lambda
+// execution environment (neither is set under `sam local start-api`).
+func insideLambdaRuntime() bool {
+	return os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" || os.Getenv("AWS_EXECUTION_ENVIRONMENT") != ""
 }
 
 func isLocal() bool {
