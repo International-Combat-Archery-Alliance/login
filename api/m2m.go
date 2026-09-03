@@ -68,11 +68,6 @@ func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTo
 			Message: "invalid client credentials",
 			Code:    AuthError,
 		}, nil
-	case errors.Is(err, m2m.ErrLockedOut):
-		return PostLoginV1M2mTokens429JSONResponse{
-			Message: "Too many failed attempts; try again later",
-			Code:    RateLimited,
-		}, nil
 	case errors.Is(err, m2m.ErrRateLimited):
 		return PostLoginV1M2mTokens429JSONResponse{
 			Message: "Rate limit exceeded",

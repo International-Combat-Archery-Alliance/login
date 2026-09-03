@@ -30,15 +30,12 @@ type Client struct {
 
 type RateWindow struct {
 	WindowCount int64
-	FailCount   int64
-	LockedUntil *time.Time
 }
 
 // Sentinel verdicts (transport maps these to HTTP codes).
 var (
 	ErrInvalidCredentials = errors.New("invalid client credentials")
 	ErrRateLimited        = errors.New("rate limit exceeded")
-	ErrLockedOut          = errors.New("too many failed attempts; try again later")
 )
 
 // Ports (implemented by adapters).
@@ -48,8 +45,6 @@ type ClientStore interface {
 
 type RateStore interface {
 	BumpWindow(ctx context.Context, clientID string) (*RateWindow, error)
-	RecordFailure(ctx context.Context, clientID string) error
-	ResetFailures(ctx context.Context, clientID string) error
 	WindowLimit() int64
 }
 
@@ -62,35 +57,23 @@ type TokenSigner interface {
 	Sign(clientID string, audience string, scopes []string) (string, error)
 }
 
-// Service holds the client-credentials exchange policy.
+// Service holds the client-credentials exchange policy: lookup, rate-limit,
+// verify, mint. No lockout by design (fixed-window rate limiting is the only
+// throttle; strong secrets make guessing infeasible).
 type Service struct {
 	store     Store
 	signer    TokenSigner
 	lifetime  time.Duration
 	dummyHash []byte
-	clock     Clock
 }
 
-// ServiceOption configures a Service.
-type ServiceOption func(*Service)
-
-// WithClock overrides the clock (tests).
-func WithClock(c Clock) ServiceOption {
-	return func(s *Service) { s.clock = c }
-}
-
-func NewService(store Store, signer TokenSigner, lifetime time.Duration, opts ...ServiceOption) *Service {
-	s := &Service{
+func NewService(store Store, signer TokenSigner, lifetime time.Duration) *Service {
+	return &Service{
 		store:     store,
 		signer:    signer,
 		lifetime:  lifetime,
 		dummyHash: makeDummyHash(),
-		clock:     SystemClock(),
 	}
-	for _, opt := range opts {
-		opt(s)
-	}
-	return s
 }
 
 // Lifetime returns the token lifetime reported as expires_in.
@@ -99,17 +82,7 @@ func (s *Service) Lifetime() time.Duration {
 }
 
 // Exchange authenticates clientID:secret and mints a machine token.
-//
-// Flow:
-//  1. Existence first: unknown/inactive get a dummy bcrypt + ErrInvalidCredentials
-//     with no RATE writes.
-//  2. Known clients: fixed-window limiter, then bcrypt. Locked IDs accept a
-//     valid secret (bypass, throttled by the same window); invalid while locked
-//     stays locked with no failure record so the lock is not sticky.
-//  3. Success mints then clears failures non-fatally.
 func (s *Service) Exchange(ctx context.Context, clientID, secret string, logger *slog.Logger) (signed string, err error) {
-	now := s.clock.Now()
-
 	client, err := s.store.GetClient(ctx, clientID)
 	if err != nil {
 		return "", fmt.Errorf("get machine client: %w", err)
@@ -130,20 +103,18 @@ func (s *Service) Exchange(ctx context.Context, clientID, secret string, logger 
 		return "", ErrRateLimited
 	}
 
-	if window.LockedUntil != nil && window.LockedUntil.After(now) {
-		if VerifySecret(client.SecretRounds, secret) {
-			return s.issue(ctx, clientID, client, logger)
-		}
-		logger.Warn("m2m lockout", slog.String("clientId", clientID), slog.Time("lockedUntil", *window.LockedUntil))
-		return "", ErrLockedOut
-	}
-
 	if !VerifySecret(client.SecretRounds, secret) {
-		s.recordFailure(ctx, clientID, logger)
+		logger.Warn("m2m invalid_client", slog.String("clientId", clientID))
 		return "", ErrInvalidCredentials
 	}
 
-	return s.issue(ctx, clientID, client, logger)
+	signed, err = s.signer.Sign(clientID, client.Audience, client.Scopes)
+	if err != nil {
+		return "", fmt.Errorf("sign machine token: %w", err)
+	}
+
+	logger.Info("m2m token issued", slog.String("clientId", clientID))
+	return signed, nil
 }
 
 // VerifySecret compares against any active round (rotation grace window).
@@ -154,27 +125,6 @@ func VerifySecret(rounds []string, secret string) bool {
 		}
 	}
 	return false
-}
-
-func (s *Service) issue(ctx context.Context, clientID string, client *Client, logger *slog.Logger) (string, error) {
-	signed, err := s.signer.Sign(clientID, client.Audience, client.Scopes)
-	if err != nil {
-		return "", fmt.Errorf("sign machine token: %w", err)
-	}
-
-	if err := s.store.ResetFailures(ctx, clientID); err != nil {
-		logger.Error("failed to reset m2m failures", slog.String("clientId", clientID), slog.String("error", err.Error()))
-	}
-
-	logger.Info("m2m token issued", slog.String("clientId", clientID))
-	return signed, nil
-}
-
-func (s *Service) recordFailure(ctx context.Context, clientID string, logger *slog.Logger) {
-	if err := s.store.RecordFailure(ctx, clientID); err != nil {
-		logger.Error("failed to record m2m failure", slog.String("clientId", clientID), slog.String("error", err.Error()))
-	}
-	logger.Warn("m2m invalid_client", slog.String("clientId", clientID))
 }
 
 func makeDummyHash() []byte {

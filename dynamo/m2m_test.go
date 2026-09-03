@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,9 +23,9 @@ type fakeDDB struct {
 	mu sync.Mutex
 
 	// Per UpdateItem call (in order):
-	condFail []bool                       // return ConditionalCheckFailedException
+	condFail []bool                      // return ConditionalCheckFailedException
 	results  []*dynamodb.UpdateItemOutput // Attributes to return (when not condFail)
-	errs     []error                      // generic error to return (overrides both)
+	errs     []error                     // generic error to return (overrides both)
 
 	calls []*dynamodb.UpdateItemInput
 }
@@ -123,7 +122,6 @@ func TestBumpWindowStartsFreshWindow(t *testing.T) {
 	f.results = []*dynamodb.UpdateItemOutput{
 		{Attributes: attrs(t, rateItem{
 			WindowCount: 1,
-			FailCount:   0,
 			WindowEnd:   now.Add(time.Minute).Unix(),
 			TTL:         now.Add(time.Minute).Unix(),
 		})},
@@ -134,7 +132,7 @@ func TestBumpWindowStartsFreshWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BumpWindow: %v", err)
 	}
-	if w.WindowCount != 1 || w.FailCount != 0 || w.LockedUntil != nil {
+	if w.WindowCount != 1 {
 		t.Fatalf("unexpected window state: %+v", w)
 	}
 
@@ -142,7 +140,7 @@ func TestBumpWindowStartsFreshWindow(t *testing.T) {
 	if got := aws.ToString(req.ConditionExpression); got != "attribute_not_exists(PK) OR attribute_not_exists(windowEnd) OR windowEnd <= :now" {
 		t.Errorf("fresh-path ConditionExpression = %q", got)
 	}
-	if got := aws.ToString(req.UpdateExpression); got != "SET windowCount = :one, failCount = :zero, windowEnd = :windowEnd, ttl = if_not_exists(ttl, :windowEnd)" {
+	if got := aws.ToString(req.UpdateExpression); got != "SET windowCount = :one, windowEnd = :windowEnd, ttl = if_not_exists(ttl, :windowEnd)" {
 		t.Errorf("fresh-path UpdateExpression = %q", got)
 	}
 	if got := num(t, req.ExpressionAttributeValues[":now"], ":now"); got != strconv.FormatInt(now.Unix(), 10) {
@@ -153,9 +151,6 @@ func TestBumpWindowStartsFreshWindow(t *testing.T) {
 	}
 	if got := num(t, req.ExpressionAttributeValues[":one"], ":one"); got != "1" {
 		t.Errorf(":one = %q", got)
-	}
-	if got := num(t, req.ExpressionAttributeValues[":zero"], ":zero"); got != "0" {
-		t.Errorf(":zero = %q", got)
 	}
 	if req.ReturnValues != types.ReturnValueAllNew {
 		t.Errorf("ReturnValues = %q", req.ReturnValues)
@@ -168,14 +163,11 @@ func TestBumpWindowCountsWithinActiveWindow(t *testing.T) {
 	clock := &manualClock{}
 	clock.Set(now)
 	f := newFakeDDB()
-	// Active window: the start-or-rollover attempt fails its condition, then
-	// the in-window ADD succeeds.
 	f.condFail = []bool{true}
 	f.results = []*dynamodb.UpdateItemOutput{
-		nil, // call 0: conditional check failed (result unused)
+		nil,
 		{Attributes: attrs(t, rateItem{
 			WindowCount: 2,
-			FailCount:   1,
 			WindowEnd:   now.Add(time.Minute).Unix(),
 			TTL:         now.Add(time.Minute).Unix(),
 		})},
@@ -187,11 +179,11 @@ func TestBumpWindowCountsWithinActiveWindow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BumpWindow: %v", err)
 	}
-	if w.WindowCount != 2 || w.FailCount != 1 {
+	if w.WindowCount != 2 {
 		t.Fatalf("unexpected window state: %+v", w)
 	}
 
-	if got := aws.ToString(f.calls[0].UpdateExpression); got != "SET windowCount = :one, failCount = :zero, windowEnd = :windowEnd, ttl = if_not_exists(ttl, :windowEnd)" {
+	if got := aws.ToString(f.calls[0].UpdateExpression); got != "SET windowCount = :one, windowEnd = :windowEnd, ttl = if_not_exists(ttl, :windowEnd)" {
 		t.Errorf("attempt 1 expression = %q", got)
 	}
 	req := f.calls[1]
@@ -208,26 +200,20 @@ func TestBumpWindowRollsOverWhenWindowEnded(t *testing.T) {
 	clock := &manualClock{}
 	clock.Set(now)
 	f := newFakeDDB()
-	// First call (t0) starts the window; second call (t0+90s) hits the
-	// rollover path — both succeed with a fresh window.
 	f.results = []*dynamodb.UpdateItemOutput{
 		{Attributes: attrs(t, rateItem{
 			WindowCount: 1,
-			FailCount:   0,
 			WindowEnd:   now.Add(time.Minute).Unix(),
 			TTL:         now.Add(time.Minute).Unix(),
 		})},
 		{Attributes: attrs(t, rateItem{
-			WindowCount: 1, // reset, not 3
-			FailCount:   0, // failure count also resets per window
+			WindowCount: 1,
 			WindowEnd:   now.Add(2 * time.Minute).Unix(),
 			TTL:         now.Add(2 * time.Minute).Unix(),
 		})},
 	}
 	store := newTestStore(t, f, clock)
 
-	// First request at t0 (window [0, 60s)), then a request at t0+90s: the
-	// window must have rolled over.
 	if _, err := store.BumpWindow(context.Background(), "client-1"); err != nil {
 		t.Fatalf("BumpWindow(1): %v", err)
 	}
@@ -239,49 +225,8 @@ func TestBumpWindowRollsOverWhenWindowEnded(t *testing.T) {
 	if w.WindowCount != 1 {
 		t.Errorf("window did not roll over: WindowCount = %d, want 1", w.WindowCount)
 	}
-	if w.FailCount != 0 {
-		t.Errorf("failCount not reset on rollover: %d, want 0", w.FailCount)
-	}
 	if got := num(t, f.calls[1].ExpressionAttributeValues[":windowEnd"], ":windowEnd"); got != strconv.FormatInt(now.Add(150*time.Second).Unix(), 10) {
-		t.Errorf("new :windowEnd = %q, want %v (request now+90s + window duration)", got, now.Add(150*time.Second).Unix())
-	}
-}
-
-func TestBumpWindowPreservesLockoutAcrossRollover(t *testing.T) {
-	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	clock := &manualClock{}
-	clock.Set(now)
-	f := newFakeDDB()
-	// Window ended while the client is still locked: rollover must not clear
-	// the lockout.
-	f.results = []*dynamodb.UpdateItemOutput{
-		{Attributes: attrs(t, rateItem{
-			WindowCount:     1,
-			FailCount:       0,
-			LockedUntilUnix: now.Add(15 * time.Minute).Unix(),
-			WindowEnd:       now.Add(time.Minute).Unix(),
-			TTL:             now.Add(15*time.Minute + 5*time.Second).Unix(),
-		})},
-	}
-	store := newTestStore(t, f, clock)
-
-	clock.Set(now.Add(2 * time.Minute))
-	w, err := store.BumpWindow(context.Background(), "client-1")
-	if err != nil {
-		t.Fatalf("BumpWindow: %v", err)
-	}
-	if w.LockedUntil == nil {
-		t.Fatal("lockout was cleared by window rollover")
-	}
-	if want := now.Add(15 * time.Minute).UTC(); !w.LockedUntil.Equal(want) {
-		t.Errorf("LockedUntil = %v, want %v", w.LockedUntil, want)
-	}
-	got := aws.ToString(f.calls[0].UpdateExpression)
-	if strings.Contains(got, "lockedUntil") {
-		t.Errorf("fresh-window expression must not reference lockedUntil: %q", got)
-	}
-	if strings.Contains(got, "ttl = :ttl") {
-		t.Errorf("fresh-window expression must not unconditionally set ttl: %q", got)
+		t.Errorf("new :windowEnd = %q, want %v", got, now.Add(150*time.Second).Unix())
 	}
 }
 
@@ -295,95 +240,6 @@ func TestBumpWindowErrorPropagates(t *testing.T) {
 
 	if _, err := store.BumpWindow(context.Background(), "client-1"); err == nil {
 		t.Fatal("expected error, got nil")
-	}
-}
-
-func TestRecordFailureBelowThreshold(t *testing.T) {
-	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	clock := &manualClock{}
-	clock.Set(now)
-	f := newFakeDDB()
-	f.results = []*dynamodb.UpdateItemOutput{
-		{Attributes: attrs(t, rateItem{WindowCount: 1, FailCount: 4, WindowEnd: now.Add(time.Minute).Unix()})},
-	}
-	store := newTestStore(t, f, clock)
-
-	if err := store.RecordFailure(context.Background(), "client-1"); err != nil {
-		t.Fatalf("RecordFailure: %v", err)
-	}
-	if len(f.calls) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(f.calls))
-	}
-	if got := aws.ToString(f.calls[0].UpdateExpression); got != "ADD failCount :one" {
-		t.Errorf("UpdateExpression = %q", got)
-	}
-}
-
-func TestRecordFailureLocksAtThreshold(t *testing.T) {
-	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	clock := &manualClock{}
-	clock.Set(now)
-	f := newFakeDDB()
-	f.results = []*dynamodb.UpdateItemOutput{
-		// ADD failCount lands at the threshold...
-		{Attributes: attrs(t, rateItem{WindowCount: 1, FailCount: 5, WindowEnd: now.Add(time.Minute).Unix()})},
-		// ...then the conditional lock SET (scripted ALL_NEW state).
-		{Attributes: attrs(t, rateItem{
-			WindowCount:     1,
-			FailCount:       5,
-			LockedUntilUnix: now.Add(15 * time.Minute).Unix(),
-			WindowEnd:       now.Add(time.Minute).Unix(),
-			TTL:             now.Add(15*time.Minute + 5*time.Second).Unix(),
-		})},
-	}
-	store := newTestStore(t, f, clock)
-
-	if err := store.RecordFailure(context.Background(), "client-1"); err != nil {
-		t.Fatalf("RecordFailure: %v", err)
-	}
-	if len(f.calls) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(f.calls))
-	}
-	if got := aws.ToString(f.calls[0].UpdateExpression); got != "ADD failCount :one" {
-		t.Errorf("fail-ADD UpdateExpression = %q", got)
-	}
-	lock := f.calls[1]
-	if got := aws.ToString(lock.UpdateExpression); got != "SET lockedUntil = :lockUntil, ttl = :lockTtl" {
-		t.Errorf("lock UpdateExpression = %q", got)
-	}
-	if got := aws.ToString(lock.ConditionExpression); got != "attribute_not_exists(lockedUntil) OR lockedUntil < :now" {
-		t.Errorf("lock ConditionExpression = %q", got)
-	}
-	if got := num(t, lock.ExpressionAttributeValues[":lockUntil"], ":lockUntil"); got != strconv.FormatInt(now.Add(15*time.Minute).Unix(), 10) {
-		t.Errorf(":lockUntil = %q, want %v (now+15m)", got, now.Add(15*time.Minute).Unix())
-	}
-	if got := num(t, lock.ExpressionAttributeValues[":lockTtl"], ":lockTtl"); got != strconv.FormatInt(now.Add(15*time.Minute+5*time.Second).Unix(), 10) {
-		t.Errorf(":lockTtl = %q, want %v (lockUntil+5s)", got, now.Add(15*time.Minute+5*time.Second).Unix())
-	}
-}
-
-func TestResetFailuresClearsLockAndFailures(t *testing.T) {
-	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	clock := &manualClock{}
-	clock.Set(now)
-	f := newFakeDDB()
-	f.results = []*dynamodb.UpdateItemOutput{
-		{Attributes: attrs(t, rateItem{WindowCount: 1, FailCount: 0, WindowEnd: now.Add(time.Minute).Unix(), TTL: now.Add(time.Minute).Unix()})},
-	}
-	store := newTestStore(t, f, clock)
-
-	if err := store.ResetFailures(context.Background(), "client-1"); err != nil {
-		t.Fatalf("ResetFailures: %v", err)
-	}
-	if len(f.calls) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(f.calls))
-	}
-	req := f.calls[0]
-	if got := aws.ToString(req.UpdateExpression); got != "SET failCount = :zero, ttl = :ttl REMOVE lockedUntil" {
-		t.Errorf("UpdateExpression = %q", got)
-	}
-	if got := num(t, req.ExpressionAttributeValues[":ttl"], ":ttl"); got != strconv.FormatInt(now.Add(time.Minute).Unix(), 10) {
-		t.Errorf(":ttl = %q", got)
 	}
 }
 

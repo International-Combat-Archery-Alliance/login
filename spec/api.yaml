@@ -115,8 +115,8 @@ paths:
         The machine client authenticates with HTTP Basic auth
         (Authorization: Basic base64(clientId:clientSecret)).
         On success a 5-minute RS256 machine JWT is returned.
-        Internet-facing and rate limited (DynamoDB fixed-window counter + lockout);
-        429 is returned when throttled or locked out.
+        Internet-facing and rate limited (DynamoDB fixed-window counter);
+        429 is returned when throttled.
       security: []
       parameters:
         - name: Authorization

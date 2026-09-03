@@ -14,11 +14,8 @@ type fakeStore struct {
 	client      *Client
 	window      *RateWindow
 	windowLimit int64
-	recordErr   error
-	resetErr    error
-	failures    int
-	resets      int
 	bumps       int
+	bumpErr     error
 }
 
 func (f *fakeStore) GetClient(_ context.Context, id string) (*Client, error) {
@@ -30,17 +27,10 @@ func (f *fakeStore) GetClient(_ context.Context, id string) (*Client, error) {
 
 func (f *fakeStore) BumpWindow(_ context.Context, _ string) (*RateWindow, error) {
 	f.bumps++
+	if f.bumpErr != nil {
+		return nil, f.bumpErr
+	}
 	return f.window, nil
-}
-
-func (f *fakeStore) RecordFailure(_ context.Context, _ string) error {
-	f.failures++
-	return f.recordErr
-}
-
-func (f *fakeStore) ResetFailures(_ context.Context, _ string) error {
-	f.resets++
-	return f.resetErr
 }
 
 func (f *fakeStore) WindowLimit() int64 {
@@ -86,8 +76,8 @@ func TestExchangeHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Exchange: %v", err)
 	}
-	if signed != "jwt" || signer.calls != 1 || store.resets != 1 {
-		t.Fatalf("unexpected result signed=%q calls=%d resets=%d", signed, signer.calls, store.resets)
+	if signed != "jwt" || signer.calls != 1 || store.bumps != 1 {
+		t.Fatalf("unexpected result signed=%q calls=%d bumps=%d", signed, signer.calls, store.bumps)
 	}
 	if svc.Lifetime() != 5*time.Minute {
 		t.Fatalf("lifetime = %v", svc.Lifetime())
@@ -101,42 +91,17 @@ func TestExchangeUnknownNoWrites(t *testing.T) {
 	if _, err := svc.Exchange(context.Background(), "nope", "secret", testLogger()); !errors.Is(err, ErrInvalidCredentials) {
 		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
 	}
-	if store.bumps != 0 || store.failures != 0 {
-		t.Fatalf("unknown must not touch limiter (bumps=%d failures=%d)", store.bumps, store.failures)
+	if store.bumps != 0 {
+		t.Fatalf("unknown must not touch limiter (bumps=%d)", store.bumps)
 	}
 }
 
-func TestExchangeLockedValidBypass(t *testing.T) {
-	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	locked := base.Add(15 * time.Minute)
-	store := &fakeStore{
-		client: testClient("secret"),
-		window: &RateWindow{WindowCount: 1, LockedUntil: &locked},
-	}
-	svc := NewService(store, &fakeSigner{signed: "jwt"}, 5*time.Minute, WithClock(FixedClock(base)))
+func TestExchangeWrongSecret(t *testing.T) {
+	store := &fakeStore{client: testClient("secret"), window: &RateWindow{WindowCount: 1}}
+	svc := NewService(store, &fakeSigner{signed: "jwt"}, 5*time.Minute)
 
-	if _, err := svc.Exchange(context.Background(), "event-registration", "secret", testLogger()); err != nil {
-		t.Fatalf("valid bypass: %v", err)
-	}
-	if store.resets != 1 {
-		t.Fatalf("expected reset, got %d", store.resets)
-	}
-}
-
-func TestExchangeLockedInvalidStaysLocked(t *testing.T) {
-	base := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-	locked := base.Add(15 * time.Minute)
-	store := &fakeStore{
-		client: testClient("secret"),
-		window: &RateWindow{WindowCount: 1, LockedUntil: &locked},
-	}
-	svc := NewService(store, &fakeSigner{signed: "jwt"}, 5*time.Minute, WithClock(FixedClock(base)))
-
-	if _, err := svc.Exchange(context.Background(), "event-registration", "bad", testLogger()); !errors.Is(err, ErrLockedOut) {
-		t.Fatalf("expected ErrLockedOut, got %v", err)
-	}
-	if store.failures != 0 {
-		t.Fatalf("locked invalid must not record, got %d", store.failures)
+	if _, err := svc.Exchange(context.Background(), "event-registration", "bad", testLogger()); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("expected ErrInvalidCredentials, got %v", err)
 	}
 }
 
@@ -150,5 +115,14 @@ func TestExchangeRateLimited(t *testing.T) {
 
 	if _, err := svc.Exchange(context.Background(), "event-registration", "secret", testLogger()); !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("expected ErrRateLimited, got %v", err)
+	}
+}
+
+func TestExchangeBumpError(t *testing.T) {
+	store := &fakeStore{client: testClient("secret"), bumpErr: errors.New("ddb down")}
+	svc := NewService(store, &fakeSigner{signed: "jwt"}, 5*time.Minute)
+
+	if _, err := svc.Exchange(context.Background(), "event-registration", "secret", testLogger()); err == nil {
+		t.Fatal("expected error, got nil")
 	}
 }

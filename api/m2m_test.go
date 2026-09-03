@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rsa"
 	"encoding/base64"
-	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -22,14 +21,10 @@ const (
 
 // fakeM2MStore is an in-memory m2m.Store for adapter tests.
 type fakeM2MStore struct {
-	client        *m2m.Client
-	window        *m2m.RateWindow
-	windowLimit   int64
-	recordFailErr error
-	resetFailErr  error
-	failures      int
-	resets        int
-	bumps         int
+	client      *m2m.Client
+	window      *m2m.RateWindow
+	windowLimit int64
+	bumps       int
 }
 
 func (f *fakeM2MStore) GetClient(ctx context.Context, clientID string) (*m2m.Client, error) {
@@ -42,16 +37,6 @@ func (f *fakeM2MStore) GetClient(ctx context.Context, clientID string) (*m2m.Cli
 func (f *fakeM2MStore) BumpWindow(ctx context.Context, clientID string) (*m2m.RateWindow, error) {
 	f.bumps++
 	return f.window, nil
-}
-
-func (f *fakeM2MStore) RecordFailure(ctx context.Context, clientID string) error {
-	f.failures++
-	return f.recordFailErr
-}
-
-func (f *fakeM2MStore) ResetFailures(ctx context.Context, clientID string) error {
-	f.resets++
-	return f.resetFailErr
 }
 
 func (f *fakeM2MStore) WindowLimit() int64 {
@@ -106,7 +91,7 @@ func b64Std(s string) string {
 func TestPostLoginV1M2mTokensHappyPath(t *testing.T) {
 	store := &fakeM2MStore{
 		client: testClientItem(testSecret),
-		window: &m2m.RateWindow{WindowCount: 1, FailCount: 0},
+		window: &m2m.RateWindow{WindowCount: 1},
 	}
 	a, priv, _ := testAPI(t, store)
 
@@ -126,8 +111,8 @@ func TestPostLoginV1M2mTokensHappyPath(t *testing.T) {
 	if tokenResp.ExpiresIn != 300 {
 		t.Fatalf("expected expires_in 300, got %d", tokenResp.ExpiresIn)
 	}
-	if store.resets != 1 {
-		t.Fatalf("expected 1 reset, got %d", store.resets)
+	if store.bumps != 1 {
+		t.Fatalf("expected 1 bump, got %d", store.bumps)
 	}
 
 	claims, err := validateWithTestCache(t, priv, tokenResp.AccessToken, "profiles-api", "m2m:player-profiles")
@@ -152,9 +137,6 @@ func TestPostLoginV1M2mTokensWrongSecret(t *testing.T) {
 	if _, ok := resp.(PostLoginV1M2mTokens401JSONResponse); !ok {
 		t.Fatalf("expected 401 response, got %T", resp)
 	}
-	if store.failures != 1 {
-		t.Fatalf("expected 1 recorded failure, got %d", store.failures)
-	}
 }
 
 func TestPostLoginV1M2mTokensUnknownClient(t *testing.T) {
@@ -173,9 +155,6 @@ func TestPostLoginV1M2mTokensUnknownClient(t *testing.T) {
 	if store.bumps != 0 {
 		t.Fatalf("unknown client must not bump window, got %d", store.bumps)
 	}
-	if store.failures != 0 {
-		t.Fatalf("unknown client must not record failure, got %d", store.failures)
-	}
 }
 
 func TestPostLoginV1M2mTokensInactiveClient(t *testing.T) {
@@ -193,8 +172,8 @@ func TestPostLoginV1M2mTokensInactiveClient(t *testing.T) {
 	if _, ok := resp.(PostLoginV1M2mTokens401JSONResponse); !ok {
 		t.Fatalf("expected 401 response for inactive client, got %T", resp)
 	}
-	if store.bumps != 0 || store.failures != 0 {
-		t.Fatalf("inactive client must not touch limiter (bumps=%d failures=%d)", store.bumps, store.failures)
+	if store.bumps != 0 {
+		t.Fatalf("inactive client must not bump window, got %d", store.bumps)
 	}
 }
 
@@ -213,50 +192,6 @@ func TestPostLoginV1M2mTokensRotationGraceWindow(t *testing.T) {
 	}
 	if _, ok := resp.(PostLoginV1M2mTokens200JSONResponse); !ok {
 		t.Fatalf("expected 200 with old round still in secretRounds, got %T", resp)
-	}
-}
-
-func TestPostLoginV1M2mTokensLockedValidBypass(t *testing.T) {
-	lockedUntil := time.Now().Add(15 * time.Minute)
-	store := &fakeM2MStore{
-		client: testClientItem(testSecret),
-		window: &m2m.RateWindow{WindowCount: 1, FailCount: 5, LockedUntil: &lockedUntil},
-	}
-	a, _, _ := testAPI(t, store)
-
-	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret)},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := resp.(PostLoginV1M2mTokens200JSONResponse); !ok {
-		t.Fatalf("expected 200 valid-bypass while locked, got %T", resp)
-	}
-	if store.resets != 1 {
-		t.Fatalf("expected lock cleared (1 reset), got %d", store.resets)
-	}
-}
-
-func TestPostLoginV1M2mTokensLockedInvalidStays429(t *testing.T) {
-	lockedUntil := time.Now().Add(15 * time.Minute)
-	store := &fakeM2MStore{
-		client: testClientItem(testSecret),
-		window: &m2m.RateWindow{WindowCount: 1, FailCount: 5, LockedUntil: &lockedUntil},
-	}
-	a, _, _ := testAPI(t, store)
-
-	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, "wrong-secret")},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := resp.(PostLoginV1M2mTokens429JSONResponse); !ok {
-		t.Fatalf("expected 429 invalid-while-locked, got %T", resp)
-	}
-	if store.failures != 0 {
-		t.Fatalf("locked invalid must not record failures, got %d", store.failures)
 	}
 }
 
@@ -309,44 +244,6 @@ func TestPostLoginV1M2mTokensBadCredentialsFormat(t *testing.T) {
 				t.Fatalf("expected 400 response, got %T", resp)
 			}
 		})
-	}
-}
-
-func TestPostLoginV1M2mTokensRecordFailureErrorStill401(t *testing.T) {
-	store := &fakeM2MStore{
-		client:        testClientItem(testSecret),
-		window:        &m2m.RateWindow{WindowCount: 1},
-		recordFailErr: errors.New("dynamo down"),
-	}
-	a, _, _ := testAPI(t, store)
-
-	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, "wrong-secret")},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := resp.(PostLoginV1M2mTokens401JSONResponse); !ok {
-		t.Fatalf("expected 401 response, got %T", resp)
-	}
-}
-
-func TestPostLoginV1M2mTokensResetFailureStill200(t *testing.T) {
-	store := &fakeM2MStore{
-		client:       testClientItem(testSecret),
-		window:       &m2m.RateWindow{WindowCount: 1},
-		resetFailErr: errors.New("dynamo down"),
-	}
-	a, _, _ := testAPI(t, store)
-
-	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
-		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret)},
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if _, ok := resp.(PostLoginV1M2mTokens200JSONResponse); !ok {
-		t.Fatalf("expected 200 despite reset failure, got %T", resp)
 	}
 }
 
