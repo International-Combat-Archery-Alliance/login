@@ -270,6 +270,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/M2MClient'
+        '400':
+          description: Invalid clientId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           description: Missing/invalid auth or non-admin caller
           content:
@@ -372,6 +378,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/M2MClientCredentials'
+        '400':
+          description: Invalid clientId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '401':
           description: Missing/invalid auth or non-admin caller
           content:
