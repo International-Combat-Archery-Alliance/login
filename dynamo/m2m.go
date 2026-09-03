@@ -63,9 +63,8 @@ type rateItem struct {
 	TTL             int64 `dynamodbav:"ttl"`
 }
 
-// M2MStore provides the machine-credential record (CLIENT#) and the m2m
-// fixed-window limiter + lockout (RATE#) in the login-api table.
-// The limiter runs before bcrypt so failed attempts never burn Lambda CPU.
+// M2MStore provides the machine-credential record (CLIENT#) and the
+// fixed-window counter + lockout (RATE#) in the login-api table.
 // windowEnd marks the end of the current fixed window and rolls the counter
 // over atomically (see BumpWindow); the ttl attribute is cleanup-only and is
 // never used for correctness (DynamoDB TTL deletion is eventually consistent).
@@ -114,8 +113,7 @@ func (s *M2MStore) WindowLimit() int64 {
 }
 
 // GetClient fetches the CLIENT#<clientId> record. Returns (nil, nil) when the
-// client does not exist (the caller equalizes timing with a dummy bcrypt
-// compare so existence is not a timing oracle).
+// item does not exist.
 func (s *M2MStore) GetClient(ctx context.Context, clientID string) (*MachineClientItem, error) {
 	result, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(s.tableName),
@@ -135,16 +133,14 @@ func (s *M2MStore) GetClient(ctx context.Context, clientID string) (*MachineClie
 	return &item, nil
 }
 
-// BumpWindow counts this request against the client's current fixed window and
-// returns the window state so the caller can enforce the limit and lockout
-// BEFORE doing any crypto work.
+// BumpWindow increments windowCount for the current fixed window and returns
+// the stored counters.
 //
 // The item stores windowEnd (end of the current fixed window). When the stored
 // window has ended, a fresh window starts in the same atomic UpdateItem:
-// windowCount resets to 1 and failCount to 0. A lockout (lockedUntil) is never
-// reset by a window rollover — it persists across windows. ttl is only ever
-// set when missing (or extended by the lockout path) so it can never shorten
-// lockout state; correctness does not depend on DynamoDB TTL deletion.
+// windowCount resets to 1 and failCount to 0. lockedUntil is never reset by a
+// window rollover. ttl is only ever set when missing (or extended by the
+// lockout path); correctness does not depend on DynamoDB TTL deletion.
 func (s *M2MStore) BumpWindow(ctx context.Context, clientID string, now time.Time) (*RateWindow, error) {
 	newWindowEnd := now.Add(s.windowDuration).Unix()
 
@@ -175,10 +171,9 @@ func (s *M2MStore) BumpWindow(ctx context.Context, clientID string, now time.Tim
 		return nil, fmt.Errorf("failed to bump m2m rate window for %q: %w", clientID, err)
 	}
 
-	// A window is still active: count this request in it atomically (safe
-	// across concurrent Lambda instances). windowEnd is re-installed if the
-	// item was created between the condition check and this ADD (e.g. TTL
-	// swept it); ttl is left alone so lockout state is never shortened.
+	// A window is still active: increment it atomically. windowEnd is
+	// re-installed if the item was created between the condition check and
+	// this ADD (e.g. TTL swept it); ttl is left alone.
 	out, err = s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName: aws.String(s.tableName),
 		Key:       rateLimitKey(clientID),
@@ -197,7 +192,7 @@ func (s *M2MStore) BumpWindow(ctx context.Context, clientID string, now time.Tim
 }
 
 // rateWindowFromAttributes unmarshals the ALL_NEW attributes of a RATE# item
-// into the RateWindow the endpoint enforces.
+// into a RateWindow.
 func rateWindowFromAttributes(attrs map[string]types.AttributeValue, clientID string) (*RateWindow, error) {
 	var item rateItem
 	if err := attributevalue.UnmarshalMap(attrs, &item); err != nil {
@@ -215,16 +210,12 @@ func rateWindowFromAttributes(attrs map[string]types.AttributeValue, clientID st
 	}, nil
 }
 
-// RecordFailure counts a failed credential attempt (ADD failCount). At the
-// lockout threshold the client is locked until now+lockoutDuration. The
-// failCount is per-window: BumpWindow resets it to zero when the window rolls
-// over, so the threshold is a per-window threshold. Concurrent failures are
-// safe: the lock SET is conditional, so only one of them wins.
+// RecordFailure increments failCount (ADD). When failCount reaches the
+// threshold, lockedUntil is set to now+lockoutDuration. failCount resets to
+// zero on window rollover (see BumpWindow). Concurrent writes are safe: the
+// lock SET is conditional, so only one wins.
 //
-// ttl is only touched when a lock is set (extended across the lockout); the
-// fail ADD never touches ttl, so DynamoDB TTL cannot delete lockout state
-// mid-lockout (a regular window item is cleaned up by TTL at its window end,
-// and recreation is cheap and correct).
+// ttl is only set when a lock is written; the fail ADD never touches ttl.
 func (s *M2MStore) RecordFailure(ctx context.Context, clientID string, now time.Time) error {
 	out, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
 		TableName:        aws.String(s.tableName),
@@ -271,11 +262,8 @@ func (s *M2MStore) RecordFailure(ctx context.Context, clientID string, now time.
 	return nil
 }
 
-// ResetFailures clears failures + lockout after a successful exchange. The
-// rate-limit counter (windowCount) is intentionally left untouched: the limit
-// applies per window regardless of success. ttl is set to now+windowDuration
-// (always >= the current windowEnd, so the item survives to its window
-// boundary); with no lock left, TTL cleanup after that is fine.
+// ResetFailures sets failCount to zero and removes lockedUntil, leaving
+// windowCount untouched. ttl is set to now+windowDuration.
 func (s *M2MStore) ResetFailures(ctx context.Context, clientID string, now time.Time) error {
 	windowEnd := now.Add(s.windowDuration)
 
