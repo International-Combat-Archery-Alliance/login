@@ -53,8 +53,7 @@ type Config struct {
 	// zero defaults to token.DefaultMachineTokenLifetime.
 	MachineTokenLifetime time.Duration
 	M2MStore             m2m.Store
-	// M2MProvisionStore backs the admin provisioning endpoints. Optional:
-	// when nil those endpoints answer 500.
+	// M2MProvisionStore backs the admin provisioning endpoints (required).
 	M2MProvisionStore m2m.ProvisionStore
 	JWKSProvider      JWKSProvider
 	AdminEmails       []string
@@ -91,11 +90,6 @@ func NewAPI(config Config) *API {
 		lifetime = token.DefaultMachineTokenLifetime
 	}
 
-	var provisioner *m2m.ProvisionService
-	if config.M2MProvisionStore != nil {
-		provisioner = m2m.NewProvisionService(config.M2MProvisionStore)
-	}
-
 	return &API{
 		logger:               config.Logger,
 		env:                  config.Environment,
@@ -104,7 +98,7 @@ func NewAPI(config Config) *API {
 		userTokens:           config.UserTokens,
 		refreshTokenStore:    config.RefreshTokenStore,
 		m2mService:           m2m.NewService(config.M2MStore, config.MachineTokenSigner, lifetime),
-		provisioner:          provisioner,
+		provisioner:          m2m.NewProvisionService(config.M2MProvisionStore),
 		jwksProvider:         config.JWKSProvider,
 		adminEmails:          adminMap,
 		flushTraces:          config.FlushTraces,

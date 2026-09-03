@@ -17,10 +17,10 @@ var (
 	ErrRoundsConflict = errors.New("machine client changed concurrently")
 )
 
-// ProvisionStore persists CLIENT# records for the admin provisioning API.
-// DynamoDB conditions make every verdict exact: create fails only when the id
+// ProvisionStore persists machine-client records for the admin provisioning
+// API. Implementations report exact verdicts: create fails only when the id
 // exists, deactivate only when it does not, and UpdateRounds only on a
-// concurrent write (optimistic locking on secretRounds).
+// concurrent write (optimistic locking on secret rounds).
 type ProvisionStore interface {
 	GetClient(ctx context.Context, clientID string) (*Client, error)
 	CreateClient(ctx context.Context, client *Client) error
@@ -30,16 +30,30 @@ type ProvisionStore interface {
 }
 
 // ProvisionService holds the admin provisioning policy: validate, generate,
-// hash, persist. The service is intentionally DDB-only: it stores bcrypt
-// rounds plus metadata and returns the plaintext secret exactly once. Secret
-// distribution to callers (SSM params, deploy config) is an explicit operator
-// step outside this API — the service never writes plaintext anywhere.
+// hash, persist. It stores one-way hashes plus metadata and returns the
+// plaintext secret exactly once. Delivering the secret to the caller is an
+// explicit operator step outside this API — the service never writes
+// plaintext anywhere.
 type ProvisionService struct {
 	clients ProvisionStore
 }
 
 func NewProvisionService(clients ProvisionStore) *ProvisionService {
 	return &ProvisionService{clients: clients}
+}
+
+// newSecretHash generates a client secret and returns it alongside its
+// one-way hash for storage.
+func newSecretHash() (secret, hash string, err error) {
+	secret, err = GenerateClientSecret()
+	if err != nil {
+		return "", "", err
+	}
+	raw, err := bcrypt.GenerateFromPassword([]byte(secret), BcryptCost)
+	if err != nil {
+		return "", "", fmt.Errorf("hash client secret: %w", err)
+	}
+	return secret, string(raw), nil
 }
 
 // CreateClient validates, generates a secret, and stores its bcrypt round
@@ -53,18 +67,14 @@ func (s *ProvisionService) CreateClient(ctx context.Context, clientID string, au
 		return "", err
 	}
 
-	secret, err := GenerateClientSecret()
+	secret, hash, err := newSecretHash()
 	if err != nil {
 		return "", err
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(secret), BcryptCost)
-	if err != nil {
-		return "", fmt.Errorf("hash client secret: %w", err)
 	}
 
 	client := &Client{
 		ID:           clientID,
-		SecretRounds: []string{string(hash)},
+		SecretRounds: []string{hash},
 		Audiences:    audiences,
 		Active:       true,
 	}
@@ -103,11 +113,11 @@ func (s *ProvisionService) RevokeClient(ctx context.Context, clientID string, lo
 	return client, nil
 }
 
-// RotateClient mints a new secret and prepends its bcrypt round (trimmed to
+// RotateClient mints a new secret and prepends its hash (trimmed to
 // MaxSecretRounds so the previous secret keeps working until callers are
-// re-delivered and recycled). Returns the plaintext secret exactly once —
-// callers must not log or retain it. The new secret takes effect for callers
-// only after the operator delivers it (e.g. SSM) and recycles them.
+// re-delivered and recycled). Returns the plaintext secret exactly once.
+// The new secret takes effect for callers only after the operator delivers
+// it and recycles them.
 func (s *ProvisionService) RotateClient(ctx context.Context, clientID string, logger *slog.Logger) (string, error) {
 	if err := ValidateClientID(clientID); err != nil {
 		return "", err
@@ -124,16 +134,12 @@ func (s *ProvisionService) RotateClient(ctx context.Context, clientID string, lo
 		return "", ErrClientInactive
 	}
 
-	secret, err := GenerateClientSecret()
+	secret, hash, err := newSecretHash()
 	if err != nil {
 		return "", err
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(secret), BcryptCost)
-	if err != nil {
-		return "", fmt.Errorf("hash client secret: %w", err)
-	}
 
-	next := append([]string{string(hash)}, client.SecretRounds...)
+	next := append([]string{hash}, client.SecretRounds...)
 	if len(next) > MaxSecretRounds {
 		next = next[:MaxSecretRounds]
 	}

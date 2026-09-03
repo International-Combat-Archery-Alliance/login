@@ -254,14 +254,3 @@ func TestRotateM2MClient(t *testing.T) {
 		t.Fatalf("expected 409 Conflict on concurrent rotation, got %T", resp)
 	}
 }
-
-func TestProvisionEndpointsUnconfigured(t *testing.T) {
-	// Configs without the provisioning stores (e.g. older wiring) fail closed.
-	a, _, _ := testAPI(t, &fakeM2MStore{window: &m2m.RateWindow{WindowCount: 1}})
-
-	if resp, _ := a.GetLoginV1M2mClients(context.Background(), GetLoginV1M2mClientsRequestObject{}); resp == nil {
-		t.Fatal("expected a response, got nil")
-	} else if _, ok := resp.(GetLoginV1M2mClients500JSONResponse); !ok {
-		t.Fatalf("expected 500 response, got %T", resp)
-	}
-}
