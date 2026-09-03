@@ -88,9 +88,8 @@ publishes a rotated key set).
    ```
    Generate with: `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048`
 
-2. **`/userJwtSigningKeys`** — same format, `user-*` namespaced kids; reserved
-   for ADR-0007. Not yet read or served by login (JWKS currently serves
-   `machine-*` only); do not provision until ADR-0007 lands.
+2. **`/userJwtSigningKeys`** — same format, `user-*` namespaced kids. **Required:**
+   login fails boot without it. Provision before deploying.
 
 3. **`/m2m/<clientId>/secret`** (SecureString) — the caller's client secret,
    **≥ 32 bytes CSPRNG** (e.g. `openssl rand -base64 48`). The caller role
