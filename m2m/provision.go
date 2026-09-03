@@ -51,12 +51,12 @@ func ValidateAudience(aud string) error {
 	return nil
 }
 
-// ValidateScopes reports whether scopes is non-empty with every entry
-// matching m2m:<callee-scope> (exact scopes, never prefixes).
+// ValidateScopes reports whether every entry matches m2m:<callee-scope>
+// (exact scopes, never prefixes). Empty is allowed: a scopeless client
+// authenticates but authorizes nowhere, since callees require an exact scope.
+// This supports provisioning an identity before its scopes exist; note scopes
+// cannot be granted later via this API (revoke + recreate instead).
 func ValidateScopes(scopes []string) error {
-	if len(scopes) == 0 {
-		return fmt.Errorf("%w: at least one scope is required", ErrInvalidScopes)
-	}
 	for _, scope := range scopes {
 		if !scopePattern.MatchString(scope) {
 			return fmt.Errorf("%w: %q must match m2m:<callee-scope>", ErrInvalidScopes, scope)

@@ -459,7 +459,7 @@ components:
           example: profiles-api
         scopes:
           type: array
-          minItems: 1
+          description: Exact scopes (may be empty — a scopeless client authenticates but authorizes nowhere).
           items:
             type: string
             pattern: '^m2m:[a-z0-9-]+$'
@@ -488,7 +488,7 @@ components:
           example: profiles-api
         scopes:
           type: array
-          minItems: 1
+          description: Exact scopes (may be empty — a scopeless client authenticates but authorizes nowhere).
           items:
             type: string
             pattern: '^m2m:[a-z0-9-]+$'

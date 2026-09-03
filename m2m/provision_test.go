@@ -82,8 +82,8 @@ func TestValidateScopes(t *testing.T) {
 	}{
 		{name: "single", scopes: []string{"m2m:player-profiles"}, wantErr: false},
 		{name: "multiple", scopes: []string{"m2m:a", "m2m:b-c"}, wantErr: false},
-		{name: "nil", scopes: nil, wantErr: true},
-		{name: "empty", scopes: []string{}, wantErr: true},
+		{name: "nil (scopeless identity)", scopes: nil, wantErr: false},
+		{name: "empty (scopeless identity)", scopes: []string{}, wantErr: false},
 		{name: "missing prefix", scopes: []string{"player-profiles"}, wantErr: true},
 		{name: "empty scope value", scopes: []string{"m2m:"}, wantErr: true},
 		{name: "uppercase", scopes: []string{"m2m:Player-Profiles"}, wantErr: true},
