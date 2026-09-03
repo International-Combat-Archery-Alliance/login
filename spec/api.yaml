@@ -163,8 +163,7 @@ paths:
       summary: Lists provisioned machine clients (metadata only)
       description: >
         Admin-only list of machine clients (clientId, audience, scopes,
-        active). Secrets are never retrievable. Backed by a GSI query on a
-        constant partition key — no table scan.
+        active). Secrets are never retrievable.
       security:
         - icaaCookieAuth: [admin]
         - icaaBearerAuth: [admin]
@@ -190,10 +189,10 @@ paths:
     post:
       summary: Provisions a new machine client credential
       description: >
-        Generates a 32-byte CSPRNG clientSecret (base64url, shown exactly
-        once), stores bcrypt(cost 10) in the CLIENT#<clientId> secretRounds[]
-        plus the /m2m/<clientId>/secret SSM SecureString. 409 if the clientId
-        already exists (including revoked records).
+        Generates a clientSecret, shown exactly once. This API never
+        distributes the secret: delivering it to the caller is an explicit
+        operator step. 409 if the clientId already exists (including revoked
+        records).
       security:
         - icaaCookieAuth: [admin]
         - icaaBearerAuth: [admin]
@@ -229,7 +228,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '500':
-          description: Internal error (e.g. failed to write client or SSM param)
+          description: Internal error
           content:
             application/json:
               schema:
@@ -238,10 +237,11 @@ paths:
     delete:
       summary: Revokes a machine client credential
       description: >
-        Soft-deactivates the CLIENT#<clientId> record (active=false); the SSM
-        param is intentionally kept so a mistaken revoke is recoverable.
-        Outstanding tokens expire within 5 minutes; callers cache the secret
-        at startup, so roll/recycle callers after revoking.
+        Marks the client revoked (visible as active=false in the list). This
+        API never touches caller-side secret storage: after revoking, remove
+        or replace the caller's copy of the secret and roll/recycle callers
+        (they cache it at startup). Outstanding tokens expire within 5
+        minutes. Revocation is permanent via this API.
       security:
         - icaaCookieAuth: [admin]
         - icaaBearerAuth: [admin]
@@ -279,14 +279,71 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
+    patch:
+      summary: Updates a machine client's audience/scopes
+      description: >
+        Updates the audience and/or scopes metadata of a machine client.
+        Secrets are untouched — rotation still goes through .../rotate, and
+        exchanges for revoked clients keep failing regardless of metadata.
+        At least one field is required; scopes may be cleared to [] (a
+        scopeless client authenticates but authorizes nowhere).
+      security:
+        - icaaCookieAuth: [admin]
+        - icaaBearerAuth: [admin]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          description: Machine client id.
+          schema:
+            type: string
+            pattern: '^[a-z0-9-]{1,64}$'
+            maxLength: 64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateM2MClientRequest'
+      responses:
+        '200':
+          description: Updated client record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/M2MClient'
+        '400':
+          description: Invalid clientId, empty body, or bad audience/scopes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Missing/invalid auth or non-admin caller
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Unknown clientId
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
   /login/v1/m2m-clients/{clientId}/rotate:
     post:
       summary: Rotates a machine client secret
       description: >
-        Generates a new 32-byte CSPRNG clientSecret (base64url, shown exactly
-        once), appends its bcrypt(cost 10) round to secretRounds[] (trimmed to
-        the newest 2 so the previous secret keeps working until callers
-        recycle), and overwrites the /m2m/<clientId>/secret SSM param.
+        Issues a new clientSecret, shown exactly once. The previous secret
+        keeps working until the operator delivers the new secret and recycles
+        callers. Delivering the new secret to the caller is an explicit
+        operator step.
       security:
         - icaaCookieAuth: [admin]
         - icaaBearerAuth: [admin]
@@ -325,7 +382,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '500':
-          description: Internal error (e.g. failed to write client or SSM param)
+          description: Internal error
           content:
             application/json:
               schema:
@@ -508,7 +565,25 @@ components:
           example: event-registration
         clientSecret:
           type: string
-          description: Base64url-encoded 32-byte CSPRNG secret. Shown exactly once.
+          description: The plaintext secret. Shown exactly once.
+    UpdateM2MClientRequest:
+      type: object
+      description: Metadata update for a machine client; at least one field is required.
+      minProperties: 1
+      properties:
+        audience:
+          type: string
+          description: Per-callee audience (<callee>-api).
+          pattern: '^[a-z0-9-]+-api$'
+          maxLength: 64
+          example: profiles-api
+        scopes:
+          type: array
+          description: Exact scopes (may be cleared to []).
+          items:
+            type: string
+            pattern: '^m2m:[a-z0-9-]+$'
+          example: ['m2m:player-profiles']
     M2MClientList:
       type: object
       description: Admin list of provisioned machine clients (metadata only).

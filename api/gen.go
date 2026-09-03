@@ -143,13 +143,22 @@ type M2MClient struct {
 type M2MClientCredentials struct {
 	ClientId string `json:"clientId"`
 
-	// ClientSecret Base64url-encoded 32-byte CSPRNG secret. Shown exactly once.
+	// ClientSecret The plaintext secret. Shown exactly once.
 	ClientSecret string `json:"clientSecret"`
 }
 
 // M2MClientList Admin list of provisioned machine clients (metadata only).
 type M2MClientList struct {
 	Clients []M2MClient `json:"clients"`
+}
+
+// UpdateM2MClientRequest Metadata update for a machine client; at least one field is required.
+type UpdateM2MClientRequest struct {
+	// Audience Per-callee audience (<callee>-api).
+	Audience *string `json:"audience,omitempty"`
+
+	// Scopes Exact scopes (may be cleared to []).
+	Scopes *[]string `json:"scopes,omitempty"`
 }
 
 // UserInfo defines model for UserInfo.
@@ -182,6 +191,9 @@ type PostLoginGoogleJSONRequestBody PostLoginGoogleJSONBody
 // PostLoginV1M2mClientsJSONRequestBody defines body for PostLoginV1M2mClients for application/json ContentType.
 type PostLoginV1M2mClientsJSONRequestBody = CreateM2MClientRequest
 
+// PatchLoginV1M2mClientsClientIdJSONRequestBody defines body for PatchLoginV1M2mClientsClientId for application/json ContentType.
+type PatchLoginV1M2mClientsClientIdJSONRequestBody = UpdateM2MClientRequest
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// Returns the JSON Web Key Set for ICAA token verification
@@ -208,6 +220,9 @@ type ServerInterface interface {
 	// Revokes a machine client credential
 	// (DELETE /login/v1/m2m-clients/{clientId})
 	DeleteLoginV1M2mClientsClientId(w http.ResponseWriter, r *http.Request, clientId string)
+	// Updates a machine client's audience/scopes
+	// (PATCH /login/v1/m2m-clients/{clientId})
+	PatchLoginV1M2mClientsClientId(w http.ResponseWriter, r *http.Request, clientId string)
 	// Rotates a machine client secret
 	// (POST /login/v1/m2m-clients/{clientId}/rotate)
 	PostLoginV1M2mClientsClientIdRotate(w http.ResponseWriter, r *http.Request, clientId string)
@@ -385,6 +400,39 @@ func (siw *ServerInterfaceWrapper) DeleteLoginV1M2mClientsClientId(w http.Respon
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.DeleteLoginV1M2mClientsClientId(w, r, clientId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PatchLoginV1M2mClientsClientId operation middleware
+func (siw *ServerInterfaceWrapper) PatchLoginV1M2mClientsClientId(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+
+	// ------------- Path parameter "clientId" -------------
+	var clientId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "clientId", r.PathValue("clientId"), &clientId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "clientId", Err: err})
+		return
+	}
+
+	ctx := r.Context()
+
+	ctx = context.WithValue(ctx, IcaaCookieAuthScopes, []string{"admin"})
+
+	ctx = context.WithValue(ctx, IcaaBearerAuthScopes, []string{"admin"})
+
+	r = r.WithContext(ctx)
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PatchLoginV1M2mClientsClientId(w, r, clientId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -599,6 +647,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc("GET "+options.BaseURL+"/login/v1/m2m-clients", wrapper.GetLoginV1M2mClients)
 	m.HandleFunc("POST "+options.BaseURL+"/login/v1/m2m-clients", wrapper.PostLoginV1M2mClients)
 	m.HandleFunc("DELETE "+options.BaseURL+"/login/v1/m2m-clients/{clientId}", wrapper.DeleteLoginV1M2mClientsClientId)
+	m.HandleFunc("PATCH "+options.BaseURL+"/login/v1/m2m-clients/{clientId}", wrapper.PatchLoginV1M2mClientsClientId)
 	m.HandleFunc("POST "+options.BaseURL+"/login/v1/m2m-clients/{clientId}/rotate", wrapper.PostLoginV1M2mClientsClientIdRotate)
 	m.HandleFunc("POST "+options.BaseURL+"/login/v1/m2m-tokens", wrapper.PostLoginV1M2mTokens)
 
@@ -913,6 +962,65 @@ func (response DeleteLoginV1M2mClientsClientId500JSONResponse) VisitDeleteLoginV
 	return json.NewEncoder(w).Encode(response)
 }
 
+type PatchLoginV1M2mClientsClientIdRequestObject struct {
+	ClientId string `json:"clientId"`
+	Body     *PatchLoginV1M2mClientsClientIdJSONRequestBody
+}
+
+type PatchLoginV1M2mClientsClientIdResponseObject interface {
+	VisitPatchLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error
+}
+
+type PatchLoginV1M2mClientsClientId200JSONResponse M2MClient
+
+func (response PatchLoginV1M2mClientsClientId200JSONResponse) VisitPatchLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(200)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PatchLoginV1M2mClientsClientId400JSONResponse Error
+
+func (response PatchLoginV1M2mClientsClientId400JSONResponse) VisitPatchLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(400)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PatchLoginV1M2mClientsClientId401JSONResponse Error
+
+func (response PatchLoginV1M2mClientsClientId401JSONResponse) VisitPatchLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(401)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PatchLoginV1M2mClientsClientId404JSONResponse Error
+
+func (response PatchLoginV1M2mClientsClientId404JSONResponse) VisitPatchLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(404)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
+type PatchLoginV1M2mClientsClientId500JSONResponse Error
+
+func (response PatchLoginV1M2mClientsClientId500JSONResponse) VisitPatchLoginV1M2mClientsClientIdResponse(w http.ResponseWriter) error {
+	w.Header().Set("Content-Type", "application/json")
+
+	w.WriteHeader(500)
+
+	return json.NewEncoder(w).Encode(response)
+}
+
 type PostLoginV1M2mClientsClientIdRotateRequestObject struct {
 	ClientId string `json:"clientId"`
 }
@@ -1055,6 +1163,9 @@ type StrictServerInterface interface {
 	// Revokes a machine client credential
 	// (DELETE /login/v1/m2m-clients/{clientId})
 	DeleteLoginV1M2mClientsClientId(ctx context.Context, request DeleteLoginV1M2mClientsClientIdRequestObject) (DeleteLoginV1M2mClientsClientIdResponseObject, error)
+	// Updates a machine client's audience/scopes
+	// (PATCH /login/v1/m2m-clients/{clientId})
+	PatchLoginV1M2mClientsClientId(ctx context.Context, request PatchLoginV1M2mClientsClientIdRequestObject) (PatchLoginV1M2mClientsClientIdResponseObject, error)
 	// Rotates a machine client secret
 	// (POST /login/v1/m2m-clients/{clientId}/rotate)
 	PostLoginV1M2mClientsClientIdRotate(ctx context.Context, request PostLoginV1M2mClientsClientIdRotateRequestObject) (PostLoginV1M2mClientsClientIdRotateResponseObject, error)
@@ -1300,6 +1411,39 @@ func (sh *strictHandler) DeleteLoginV1M2mClientsClientId(w http.ResponseWriter, 
 	}
 }
 
+// PatchLoginV1M2mClientsClientId operation middleware
+func (sh *strictHandler) PatchLoginV1M2mClientsClientId(w http.ResponseWriter, r *http.Request, clientId string) {
+	var request PatchLoginV1M2mClientsClientIdRequestObject
+
+	request.ClientId = clientId
+
+	var body PatchLoginV1M2mClientsClientIdJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PatchLoginV1M2mClientsClientId(ctx, request.(PatchLoginV1M2mClientsClientIdRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PatchLoginV1M2mClientsClientId")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PatchLoginV1M2mClientsClientIdResponseObject); ok {
+		if err := validResponse.VisitPatchLoginV1M2mClientsClientIdResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // PostLoginV1M2mClientsClientIdRotate operation middleware
 func (sh *strictHandler) PostLoginV1M2mClientsClientIdRotate(w http.ResponseWriter, r *http.Request, clientId string) {
 	var request PostLoginV1M2mClientsClientIdRotateRequestObject
@@ -1355,63 +1499,65 @@ func (sh *strictHandler) PostLoginV1M2mTokens(w http.ResponseWriter, r *http.Req
 // Base64 encoded, gzipped, json marshaled Swagger object
 var swaggerSpec = []string{
 
-	"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",
+	"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",
 }
 
 // GetSwagger returns the content of the embedded swagger specification file
