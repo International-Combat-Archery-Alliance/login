@@ -5,7 +5,7 @@ go 1.25.0
 tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
 require (
-	github.com/International-Combat-Archery-Alliance/auth v0.4.1-0.20260903015020-191fdcaf55f9
+	github.com/International-Combat-Archery-Alliance/auth v0.5.0
 	github.com/International-Combat-Archery-Alliance/middleware v0.5.0
 	github.com/International-Combat-Archery-Alliance/telemetry v0.2.0
 	github.com/aws/aws-sdk-go-v2 v1.41.5
