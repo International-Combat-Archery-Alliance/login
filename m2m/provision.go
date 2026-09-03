@@ -65,6 +65,21 @@ func ValidateScopes(scopes []string) error {
 	return nil
 }
 
+// ValidateAudiences reports whether every audience key matches <callee>-api
+// with every scope entry matching m2m:<callee-scope>. Empty is allowed: a
+// client with no audiences authenticates but authorizes nowhere.
+func ValidateAudiences(audiences map[string][]string) error {
+	for aud, scopes := range audiences {
+		if err := ValidateAudience(aud); err != nil {
+			return err
+		}
+		if err := ValidateScopes(scopes); err != nil {
+			return fmt.Errorf("audience %q: %w", aud, err)
+		}
+	}
+	return nil
+}
+
 // GenerateClientSecret returns base64url(32 CSPRNG bytes) — 43 chars, shown
 // to the admin exactly once and never persisted in plaintext outside SSM.
 func GenerateClientSecret() (string, error) {

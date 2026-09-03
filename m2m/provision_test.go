@@ -106,6 +106,33 @@ func TestValidateScopes(t *testing.T) {
 	}
 }
 
+func TestValidateAudiences(t *testing.T) {
+	tests := []struct {
+		name      string
+		audiences map[string][]string
+		wantErr   bool
+	}{
+		{name: "single", audiences: map[string][]string{"profiles-api": {"m2m:player-profiles"}}, wantErr: false},
+		{name: "multiple", audiences: map[string][]string{"a-api": {"m2m:x"}, "b-api": {}}, wantErr: false},
+		{name: "nil", audiences: nil, wantErr: false},
+		{name: "empty", audiences: map[string][]string{}, wantErr: false},
+		{name: "bad key", audiences: map[string][]string{"profiles": {"m2m:x"}}, wantErr: true},
+		{name: "bad scope entry", audiences: map[string][]string{"profiles-api": {"nope"}}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateAudiences(tt.audiences)
+			if tt.wantErr && err == nil {
+				t.Fatalf("ValidateAudiences(%v): expected error, got nil", tt.audiences)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("ValidateAudiences(%v): %v", tt.audiences, err)
+			}
+		})
+	}
+}
+
 func TestGenerateClientSecret(t *testing.T) {
 	seen := map[string]bool{}
 	for range 10 {

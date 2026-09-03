@@ -114,10 +114,11 @@ paths:
       description: >
         Client-credentials exchange for service-to-service authentication.
         The machine client authenticates with HTTP Basic auth
-        (Authorization: Basic base64(clientId:clientSecret)).
-        On success a 5-minute RS256 machine JWT is returned.
-        Internet-facing and rate limited (DynamoDB fixed-window counter);
-        429 is returned when throttled.
+        (Authorization: Basic base64(clientId:clientSecret)) and requests a
+        token for one of its provisioned audiences. On success a 5-minute
+        RS256 machine JWT is returned, bound to that audience with the exact
+        scopes provisioned for it. Internet-facing and rate limited
+        (DynamoDB fixed-window counter); 429 is returned when throttled.
       security: []
       parameters:
         - name: Authorization
@@ -127,6 +128,14 @@ paths:
           schema:
             type: string
             minLength: 10
+        - name: audience
+          in: query
+          required: true
+          description: Target audience — must be one of the client's provisioned audiences.
+          schema:
+            type: string
+            pattern: '^[a-z0-9-]+-api$'
+            maxLength: 64
       responses:
         '200':
           description: Machine token issued
@@ -135,13 +144,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/AccessToken'
         '400':
-          description: Missing or malformed Basic credentials
+          description: Missing or malformed Basic credentials or audience
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
         '401':
-          description: Unknown clientId or invalid clientSecret (invalid_client)
+          description: Unknown clientId, invalid clientSecret, or audience not provisioned for the client (invalid_client)
           content:
             application/json:
               schema:
@@ -162,8 +171,8 @@ paths:
     get:
       summary: Lists provisioned machine clients (metadata only)
       description: >
-        Admin-only list of machine clients (clientId, audience, scopes,
-        active). Secrets are never retrievable.
+        Admin-only list of machine clients (clientId, audiences, active).
+        Secrets are never retrievable.
       security:
         - icaaCookieAuth: [admin]
         - icaaBearerAuth: [admin]
@@ -181,7 +190,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
         '500':
-          description: Internal error (e.g. failed to query clients)
+          description: Internal error
           content:
             application/json:
               schema:
@@ -210,7 +219,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/M2MClientCredentials'
         '400':
-          description: Invalid clientId/audience/scopes
+          description: Invalid clientId or audiences
           content:
             application/json:
               schema:
@@ -280,13 +289,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
     patch:
-      summary: Updates a machine client's audience/scopes
+      summary: Replaces a machine client's audiences
       description: >
-        Updates the audience and/or scopes metadata of a machine client.
+        Replaces the complete audiences-to-scopes map of a machine client;
+        entries omitted here are removed (use {} to strip all access).
         Secrets are untouched — rotation still goes through .../rotate, and
         exchanges for revoked clients keep failing regardless of metadata.
-        At least one field is required; scopes may be cleared to [] (a
-        scopeless client authenticates but authorizes nowhere).
+        Applies to active and revoked clients alike.
       security:
         - icaaCookieAuth: [admin]
         - icaaBearerAuth: [admin]
@@ -499,8 +508,7 @@ components:
       description: Provisioned machine client metadata (never includes a secret).
       required:
         - clientId
-        - audience
-        - scopes
+        - audiences
         - active
       properties:
         clientId:
@@ -508,19 +516,15 @@ components:
           pattern: '^[a-z0-9-]{1,64}$'
           maxLength: 64
           example: event-registration
-        audience:
-          type: string
-          description: Per-callee audience (<callee>-api), never the global icaa-api.
-          pattern: '^[a-z0-9-]+-api$'
-          maxLength: 64
-          example: profiles-api
-        scopes:
-          type: array
-          description: Exact scopes (may be empty — a scopeless client authenticates but authorizes nowhere).
-          items:
-            type: string
-            pattern: '^m2m:[a-z0-9-]+$'
-          example: ['m2m:player-profiles']
+        audiences:
+          type: object
+          description: Provisioned audiences mapped to their exact scopes. An audience with no scopes (or no audiences at all) authenticates but authorizes nowhere.
+          additionalProperties:
+            type: array
+            items:
+              type: string
+              pattern: '^m2m:[a-z0-9-]+$'
+          example: {'profiles-api': ['m2m:player-profiles']}
         active:
           type: boolean
           description: False once revoked (DELETE). Revoked clients fail the exchange with 401.
@@ -529,27 +533,22 @@ components:
       description: Provisioning request for a new machine client.
       required:
         - clientId
-        - audience
-        - scopes
+        - audiences
       properties:
         clientId:
           type: string
           pattern: '^[a-z0-9-]{1,64}$'
           maxLength: 64
           example: event-registration
-        audience:
-          type: string
-          description: Per-callee audience (<callee>-api).
-          pattern: '^[a-z0-9-]+-api$'
-          maxLength: 64
-          example: profiles-api
-        scopes:
-          type: array
-          description: Exact scopes (may be empty — a scopeless client authenticates but authorizes nowhere).
-          items:
-            type: string
-            pattern: '^m2m:[a-z0-9-]+$'
-          example: ['m2m:player-profiles']
+        audiences:
+          type: object
+          description: Provisioned audiences mapped to their exact scopes. May be empty to provision an identity before its scopes exist.
+          additionalProperties:
+            type: array
+            items:
+              type: string
+              pattern: '^m2m:[a-z0-9-]+$'
+          example: {'profiles-api': ['m2m:player-profiles']}
     M2MClientCredentials:
       type: object
       description: >
@@ -568,22 +567,19 @@ components:
           description: The plaintext secret. Shown exactly once.
     UpdateM2MClientRequest:
       type: object
-      description: Metadata update for a machine client; at least one field is required.
-      minProperties: 1
+      description: Full replacement of a machine client's audiences map (secrets untouched).
+      required:
+        - audiences
       properties:
-        audience:
-          type: string
-          description: Per-callee audience (<callee>-api).
-          pattern: '^[a-z0-9-]+-api$'
-          maxLength: 64
-          example: profiles-api
-        scopes:
-          type: array
-          description: Exact scopes (may be cleared to []).
-          items:
-            type: string
-            pattern: '^m2m:[a-z0-9-]+$'
-          example: ['m2m:player-profiles']
+        audiences:
+          type: object
+          description: Complete new audiences-to-scopes map; entries omitted here are removed.
+          additionalProperties:
+            type: array
+            items:
+              type: string
+              pattern: '^m2m:[a-z0-9-]+$'
+          example: {'profiles-api': ['m2m:player-profiles']}
     M2MClientList:
       type: object
       description: Admin list of provisioned machine clients (metadata only).
