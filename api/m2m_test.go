@@ -26,6 +26,7 @@ type fakeM2MStore struct {
 	window        *dynamo.RateWindow
 	windowLimit   int64
 	recordFailErr error
+	resetFailErr  error
 	failures      int
 	resets        int
 }
@@ -48,7 +49,7 @@ func (f *fakeM2MStore) RecordFailure(ctx context.Context, clientID string, now t
 
 func (f *fakeM2MStore) ResetFailures(ctx context.Context, clientID string, now time.Time) error {
 	f.resets++
-	return nil
+	return f.resetFailErr
 }
 
 func (f *fakeM2MStore) WindowLimit() int64 {
@@ -303,6 +304,65 @@ func TestPostLoginV1M2mTokensRecordFailureErrorStill401(t *testing.T) {
 	}
 	if _, ok := resp.(PostLoginV1M2mTokens401JSONResponse); !ok {
 		t.Fatalf("expected 401 response, got %T", resp)
+	}
+}
+
+func TestPostLoginV1M2mTokensResetFailureStill200(t *testing.T) {
+	// ResetFailures is a non-security clear: a transient DDB failure must not
+	// 500 a valid credential. Token is still minted; the next success retries.
+	store := &fakeM2MStore{
+		client:       testClientItem(testSecret),
+		window:       &dynamo.RateWindow{WindowCount: 1},
+		resetFailErr: errors.New("dynamo down"),
+	}
+	a, _, _ := testAPI(t, store)
+
+	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
+		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret)},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, ok := resp.(PostLoginV1M2mTokens200JSONResponse); !ok {
+		t.Fatalf("expected 200 despite reset failure, got %T", resp)
+	}
+}
+
+func TestPostLoginV1M2mTokensExpiresInMatchesLifetime(t *testing.T) {
+	priv, _, err := token.GenerateMachineDevKeypair()
+	if err != nil {
+		t.Fatalf("generate keypair: %v", err)
+	}
+	keys := map[string]*rsa.PrivateKey{"machine-test": priv}
+	signer, err := token.NewMachineTokenSigner(keys, "machine-test",
+		token.WithMachineTokenLifetime(10*time.Minute))
+	if err != nil {
+		t.Fatalf("new signer: %v", err)
+	}
+	a := NewAPI(Config{
+		MachineTokenSigner:   signer,
+		MachineTokenLifetime: 10 * time.Minute,
+		M2MStore: &fakeM2MStore{
+			client: testClientItem(testSecret),
+			window: &dynamo.RateWindow{WindowCount: 1},
+		},
+		JWKSProvider: fakeJWKSProvider{jwks: JWKS{Keys: []JWK{}}},
+		Logger:       slog.New(slog.DiscardHandler),
+		Environment:  PROD,
+	})
+
+	resp, err := a.PostLoginV1M2mTokens(context.Background(), PostLoginV1M2mTokensRequestObject{
+		Params: PostLoginV1M2mTokensParams{Authorization: basicAuthHeader(testClientID, testSecret)},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	tokenResp, ok := resp.(PostLoginV1M2mTokens200JSONResponse)
+	if !ok {
+		t.Fatalf("expected 200 response, got %T", resp)
+	}
+	if tokenResp.ExpiresIn != 600 {
+		t.Fatalf("expected expires_in 600, got %d", tokenResp.ExpiresIn)
 	}
 }
 

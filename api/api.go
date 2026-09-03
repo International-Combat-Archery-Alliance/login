@@ -30,6 +30,9 @@ type Config struct {
 	TokenService         *token.TokenService
 	RefreshTokenStore    token.RefreshTokenStore
 	MachineTokenSigner   *token.MachineTokenSigner
+	// MachineTokenLifetime must match the lifetime the signer was built with;
+	// zero defaults to token.DefaultMachineTokenLifetime.
+	MachineTokenLifetime time.Duration
 	M2MStore             M2MStore
 	JWKSProvider         JWKSProvider
 	AdminEmails          []string
@@ -48,6 +51,7 @@ type API struct {
 	tokenService         *token.TokenService
 	refreshTokenStore    token.RefreshTokenStore
 	machineTokenSigner   *token.MachineTokenSigner
+	machineTokenLifetime time.Duration
 	m2mStore             M2MStore
 	jwksProvider         JWKSProvider
 	adminEmails          map[string]bool
@@ -63,6 +67,11 @@ func NewAPI(config Config) *API {
 		adminMap[strings.ToLower(email)] = true
 	}
 
+	lifetime := config.MachineTokenLifetime
+	if lifetime == 0 {
+		lifetime = token.DefaultMachineTokenLifetime
+	}
+
 	return &API{
 		logger:                config.Logger,
 		env:                   config.Environment,
@@ -71,6 +80,7 @@ func NewAPI(config Config) *API {
 		tokenService:          config.TokenService,
 		refreshTokenStore:     config.RefreshTokenStore,
 		machineTokenSigner:    config.MachineTokenSigner,
+		machineTokenLifetime:  lifetime,
 		m2mStore:              config.M2MStore,
 		jwksProvider:          config.JWKSProvider,
 		adminEmails:           adminMap,

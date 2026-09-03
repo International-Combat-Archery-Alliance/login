@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/International-Combat-Archery-Alliance/auth/token"
 	"github.com/International-Combat-Archery-Alliance/login/dynamo"
 	"github.com/International-Combat-Archery-Alliance/middleware"
 	"golang.org/x/crypto/bcrypt"
@@ -146,17 +145,9 @@ func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTo
 		}, nil
 	}
 
-	// Success clears failures + any lockout.
-	if err := a.m2mStore.ResetFailures(ctx, clientID, now); err != nil {
-		span.RecordError(err)
-		logger.Error("failed to reset m2m failures", slog.String("clientId", clientID), slog.String("error", err.Error()))
-		return PostLoginV1M2mTokens500JSONResponse{
-			Message: "internal error",
-			Code:    InternalError,
-		}, nil
-	}
-
 	// Mint the machine token with the client's allowed audience + exact scope.
+	// Signing runs before ResetFailures so a transient DDB write failure on
+	// the non-security clear cannot 500 a valid credential.
 	signed, err := a.machineTokenSigner.Sign(clientID, client.Audience, client.Scopes)
 	if err != nil {
 		span.RecordError(err)
@@ -167,13 +158,19 @@ func (a *API) PostLoginV1M2mTokens(ctx context.Context, request PostLoginV1M2mTo
 		}, nil
 	}
 
+	// Success clears failures + any lockout. Failure here is non-fatal: the
+	// token is already minted and valid, and the next success retries the
+	// clear. Failing to clear is fail-closed (safe), just retried.
+	if err := a.m2mStore.ResetFailures(ctx, clientID, now); err != nil {
+		span.RecordError(err)
+		logger.Error("failed to reset m2m failures", slog.String("clientId", clientID), slog.String("error", err.Error()))
+	}
+
 	logger.Info("m2m token issued", slog.String("clientId", clientID))
-	// expires_in must stay in sync with the signer lifetime: main.go never
-	// overrides WithMachineTokenLifetime, so the default is authoritative.
 	return PostLoginV1M2mTokens200JSONResponse{
 		AccessToken: signed,
 		TokenType:   "Bearer",
-		ExpiresIn:   int(token.DefaultMachineTokenLifetime.Seconds()),
+		ExpiresIn:   int(a.machineTokenLifetime.Seconds()),
 	}, nil
 }
 

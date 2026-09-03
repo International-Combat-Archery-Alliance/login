@@ -164,9 +164,12 @@ func setupApi(logger *slog.Logger) (*api.API, func(context.Context) error, error
 		token.WithSigningKeys(cfg.JWTSigningKeys, cfg.JWTCurrentKeyID),
 	)
 
-	machineTokenSigner, err := token.NewMachineTokenSigner(cfg.MachineSigningKeys, cfg.MachineCurrentKeyID)
-	// NOTE: default 5-minute lifetime is authoritative for expires_in in
-	// api/m2m.go. Do not pass WithMachineTokenLifetime without updating it.
+	machineTokenLifetime := token.DefaultMachineTokenLifetime
+	machineTokenSigner, err := token.NewMachineTokenSigner(
+		cfg.MachineSigningKeys,
+		cfg.MachineCurrentKeyID,
+		token.WithMachineTokenLifetime(machineTokenLifetime),
+	)
 	if err != nil {
 		startupSpan.RecordError(err)
 		startupSpan.End()
@@ -185,6 +188,7 @@ func setupApi(logger *slog.Logger) (*api.API, func(context.Context) error, error
 		TokenService:         tokenService,
 		RefreshTokenStore:    refreshTokenStore,
 		MachineTokenSigner:   machineTokenSigner,
+		MachineTokenLifetime: machineTokenLifetime,
 		M2MStore:             m2mStore,
 		JWKSProvider:         jwksProvider,
 		AdminEmails:          cfg.AdminEmails,
