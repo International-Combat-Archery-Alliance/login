@@ -19,14 +19,15 @@ var (
 
 // ProvisionStore persists machine-client records for the admin provisioning
 // API. Implementations report exact verdicts: create fails only when the id
-// exists, deactivate only when it does not, and UpdateRounds only on a
-// concurrent write (optimistic locking on secret rounds).
+// exists, deactivate/metadata-update only when it does not, and UpdateRounds
+// only on a concurrent write (optimistic locking on secret rounds).
 type ProvisionStore interface {
 	GetClient(ctx context.Context, clientID string) (*Client, error)
 	CreateClient(ctx context.Context, client *Client) error
 	ListClients(ctx context.Context) ([]*Client, error)
 	DeactivateClient(ctx context.Context, clientID string) (*Client, error)
 	UpdateRounds(ctx context.Context, clientID string, expected, next []string) error
+	UpdateAudiences(ctx context.Context, clientID string, audiences map[string][]string) (*Client, error)
 }
 
 // ProvisionService holds the admin provisioning policy: validate, generate,
@@ -91,6 +92,29 @@ func (s *ProvisionService) CreateClient(ctx context.Context, clientID string, au
 // ListClients returns client metadata (never secrets).
 func (s *ProvisionService) ListClients(ctx context.Context) ([]*Client, error) {
 	return s.clients.ListClients(ctx)
+}
+
+// UpdateClient replaces the complete audiences-to-scopes map. Entries
+// omitted by the caller are removed (pass {} to strip all access). Secrets
+// are untouched. Applies to active and revoked clients alike — exchanges for
+// revoked clients keep failing regardless of metadata.
+func (s *ProvisionService) UpdateClient(ctx context.Context, clientID string, audiences map[string][]string, logger *slog.Logger) (*Client, error) {
+	if err := ValidateClientID(clientID); err != nil {
+		return nil, err
+	}
+	if err := ValidateAudiences(audiences); err != nil {
+		return nil, err
+	}
+
+	client, err := s.clients.UpdateAudiences(ctx, clientID, audiences)
+	if err != nil {
+		return nil, err
+	}
+
+	logger.Info("m2m client audiences replaced",
+		slog.String("clientId", clientID),
+		slog.Int("audiences", len(audiences)))
+	return client, nil
 }
 
 // RevokeClient soft-deactivates the record (active=false): new exchanges fail
