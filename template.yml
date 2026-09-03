@@ -84,6 +84,14 @@ Resources:
                 - dynamodb:UpdateItem
                 - dynamodb:DeleteItem
               Resource: !GetAtt LoginApiTable.Arn
+            # MA-6 list endpoint queries GSI1: Query needs both the table
+            # ARN and the index ARN.
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+              Resource:
+                - !GetAtt LoginApiTable.Arn
+                - !Sub "${LoginApiTable.Arn}/index/GSI1"
             - Effect: Allow
               Action:
                 - ssm:GetParameter
