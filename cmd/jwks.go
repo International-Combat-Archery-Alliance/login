@@ -10,11 +10,8 @@ import (
 	"github.com/International-Combat-Archery-Alliance/login/api"
 )
 
-// staticJWKSProvider serves a fixed key set. The JWKS is derived once at
-// startup from the signing keys fetchAppConfig already loaded from SSM — the
-// same material the signer uses — so serving cannot fail, go stale, or drift
-// from what login actually signs with. Key rotation is an SSM edit + redeploy
-// (cold starts serve the new set; verifiers lazy-refetch on an unknown kid).
+// staticJWKSProvider serves a fixed key set derived once at startup from the
+// configured signing keys.
 type staticJWKSProvider struct {
 	jwks api.JWKS
 }
@@ -23,11 +20,14 @@ func (s staticJWKSProvider) PublicJWKS(context.Context) (api.JWKS, error) {
 	return s.jwks, nil
 }
 
-// keypairJWKS builds a JWKS from a private-key set.
-func keypairJWKS(keys map[string]*rsa.PrivateKey) api.JWKS {
+// keypairJWKS builds a JWKS from the machine + user private-key sets.
+func keypairJWKS(machineKeys map[string]*rsa.PrivateKey, userKeys map[string]*rsa.PrivateKey) api.JWKS {
 	jwks := api.JWKS{Keys: []api.JWK{}}
-	for _, kid := range sortedKids(keys) {
-		jwks.Keys = append(jwks.Keys, rsaPublicJWK(kid, keys[kid]))
+	for _, kid := range sortedKids(machineKeys) {
+		jwks.Keys = append(jwks.Keys, rsaPublicJWK(kid, machineKeys[kid]))
+	}
+	for _, kid := range sortedKids(userKeys) {
+		jwks.Keys = append(jwks.Keys, rsaPublicJWK(kid, userKeys[kid]))
 	}
 	return jwks
 }
@@ -41,9 +41,7 @@ func sortedKids[K any](m map[string]K) []string {
 	return kids
 }
 
-// rsaPublicJWK converts an RSA private key's public half into the JWK shape
-// served by the JWKS endpoint (JWKS-only key distribution — there is no
-// /jwtPublicKeys SSM mirror).
+// rsaPublicJWK converts an RSA private key's public half into JWK shape.
 func rsaPublicJWK(kid string, priv *rsa.PrivateKey) api.JWK {
 	use := "sig"
 	alg := "RS256"

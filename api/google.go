@@ -46,7 +46,7 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 	logger.Info("successful login", slog.String("email", email))
 
 	// Generate ICAA access token
-	accessToken, err := a.tokenService.GenerateAccessToken(email, picture, roles)
+	accessToken, err := a.userTokens.GenerateAccessToken(email, picture, roles)
 	if err != nil {
 		span.RecordError(err)
 		logger.Error("failed to generate access token", slog.String("error", err.Error()))
@@ -57,7 +57,7 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 	}
 
 	// Generate ICAA refresh token
-	refreshTokenID, refreshToken, refreshExpiresAt, err := a.tokenService.GenerateRefreshToken()
+	refreshTokenID, refreshToken, refreshExpiresAt, err := a.userTokens.GenerateRefreshToken()
 	if err != nil {
 		span.RecordError(err)
 		logger.Error("failed to generate refresh token", slog.String("error", err.Error()))
@@ -86,7 +86,7 @@ func (a *API) PostLoginGoogle(ctx context.Context, request PostLoginGoogleReques
 	domain := a.getCookieDomain()
 
 	// Get access token expiration for cookie
-	accessClaims, err := a.tokenService.ValidateAccessToken(accessToken)
+	accessClaims, err := a.userTokens.ValidateUserAccessToken(ctx, accessToken)
 	if err != nil {
 		span.RecordError(err)
 		logger.Error("failed to validate generated token somehow", slog.String("error", err.Error()))

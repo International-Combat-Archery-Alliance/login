@@ -19,7 +19,7 @@ func TestKeypairJWKSDeterministicOrder(t *testing.T) {
 		keys[kid] = priv
 	}
 
-	jwks := keypairJWKS(keys)
+	jwks := keypairJWKS(keys, map[string]*rsa.PrivateKey{})
 
 	if len(jwks.Keys) != 3 {
 		t.Fatalf("expected 3 keys, got %d", len(jwks.Keys))
@@ -40,12 +40,36 @@ func TestKeypairJWKSSingleKey(t *testing.T) {
 		t.Fatalf("generate dev keypair: %v", err)
 	}
 
-	jwks := keypairJWKS(map[string]*rsa.PrivateKey{"machine-01": priv})
+	jwks := keypairJWKS(map[string]*rsa.PrivateKey{"machine-01": priv}, map[string]*rsa.PrivateKey{})
 
 	if len(jwks.Keys) != 1 || jwks.Keys[0].Kid != "machine-01" {
 		t.Fatalf("unexpected jwks: %+v", jwks.Keys)
 	}
 	assertJWKShape(t, jwks.Keys[0], priv)
+}
+
+func TestKeypairJWKSUnionMachineAndUser(t *testing.T) {
+	machinePriv, _, err := token.GenerateMachineDevKeypair()
+	if err != nil {
+		t.Fatalf("generate machine keypair: %v", err)
+	}
+	userPriv, _, err := token.GenerateUserDevKeypair()
+	if err != nil {
+		t.Fatalf("generate user keypair: %v", err)
+	}
+
+	jwks := keypairJWKS(
+		map[string]*rsa.PrivateKey{"machine-01": machinePriv},
+		map[string]*rsa.PrivateKey{"user-01": userPriv},
+	)
+
+	if len(jwks.Keys) != 2 {
+		t.Fatalf("expected 2 keys, got %d", len(jwks.Keys))
+	}
+	kids := jwkKids(jwks)
+	if kids[0] != "machine-01" || kids[1] != "user-01" {
+		t.Fatalf("expected [machine-01 user-01], got %v", kids)
+	}
 }
 
 func assertJWKShape(t *testing.T, jwk api.JWK, priv *rsa.PrivateKey) {

@@ -25,10 +25,28 @@ const (
 	PROD
 )
 
+// UserTokenIssuer mints user tokens.
+type UserTokenIssuer interface {
+	GenerateAccessToken(email string, picture string, roles []auth.Role) (string, error)
+	GenerateRefreshToken() (tokenID string, signedToken string, expiresAt time.Time, err error)
+}
+
+// UserTokenValidator verifies user tokens.
+type UserTokenValidator interface {
+	ValidateUserAccessToken(ctx context.Context, tokenString string) (*token.ICAAClaims, error)
+	ValidateUserRefreshToken(ctx context.Context, tokenString string) (string, error)
+}
+
+// UserTokens signs and validates user tokens with locally held keys.
+type UserTokens interface {
+	UserTokenIssuer
+	UserTokenValidator
+}
+
 // Config holds all dependencies for the API
 type Config struct {
 	GoogleTokenValidator auth.Validator
-	TokenService         *token.TokenService
+	UserTokens           UserTokens
 	RefreshTokenStore    token.RefreshTokenStore
 	MachineTokenSigner   m2m.TokenSigner
 	// MachineTokenLifetime must match the lifetime the signer was built with;
@@ -49,7 +67,7 @@ type API struct {
 	env                  Environment
 	tracer               trace.Tracer
 	googleTokenValidator auth.Validator
-	tokenService         *token.TokenService
+	userTokens           UserTokens
 	refreshTokenStore    token.RefreshTokenStore
 	m2mService           *m2m.Service
 	jwksProvider         JWKSProvider
@@ -74,7 +92,7 @@ func NewAPI(config Config) *API {
 		env:                  config.Environment,
 		tracer:               otel.Tracer("github.com/International-Combat-Archery-Alliance/login/api"),
 		googleTokenValidator: config.GoogleTokenValidator,
-		tokenService:         config.TokenService,
+		userTokens:           config.UserTokens,
 		refreshTokenStore:    config.RefreshTokenStore,
 		m2mService:           m2m.NewService(config.M2MStore, config.MachineTokenSigner, lifetime),
 		jwksProvider:         config.JWKSProvider,

@@ -48,7 +48,7 @@ func (a *API) PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequ
 	}
 
 	// Generate new access token using stored picture and roles
-	accessToken, err := a.tokenService.GenerateAccessToken(userData.UserEmail, userData.Picture, userData.Roles)
+	accessToken, err := a.userTokens.GenerateAccessToken(userData.UserEmail, userData.Picture, userData.Roles)
 	if err != nil {
 		span.RecordError(err)
 		logger.Error("failed to generate access token", slog.String("error", err.Error()))
@@ -59,7 +59,7 @@ func (a *API) PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequ
 	}
 
 	// Generate new refresh token
-	newRefreshTokenID, newRefreshToken, newRefreshExpiresAt, err := a.tokenService.GenerateRefreshToken()
+	newRefreshTokenID, newRefreshToken, newRefreshExpiresAt, err := a.userTokens.GenerateRefreshToken()
 	if err != nil {
 		span.RecordError(err)
 		logger.Error("failed to generate refresh token", slog.String("error", err.Error()))
@@ -85,7 +85,7 @@ func (a *API) PostLoginRefresh(ctx context.Context, request PostLoginRefreshRequ
 	domain := a.getCookieDomain()
 
 	// Get access token expiration
-	accessClaims, err := a.tokenService.ValidateAccessToken(accessToken)
+	accessClaims, err := a.userTokens.ValidateUserAccessToken(ctx, accessToken)
 	if err != nil {
 		span.RecordError(err)
 		logger.Error("somehow generated a bad access token", slog.String("error", err.Error()))

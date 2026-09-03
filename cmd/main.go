@@ -159,10 +159,15 @@ func setupApi(logger *slog.Logger) (*api.API, func(context.Context) error, error
 		return nil, traceShutdown, fmt.Errorf("google token validator: %w", err)
 	}
 
-	tokenService := token.NewTokenService(
-		cfg.JWTSigningKeys[cfg.JWTCurrentKeyID],
-		token.WithSigningKeys(cfg.JWTSigningKeys, cfg.JWTCurrentKeyID),
+	userTokenSigner, err := token.NewUserTokenSigner(
+		cfg.UserSigningKeys,
+		cfg.UserCurrentKeyID,
 	)
+	if err != nil {
+		startupSpan.RecordError(err)
+		startupSpan.End()
+		return nil, traceShutdown, fmt.Errorf("user token signer: %w", err)
+	}
 
 	machineTokenLifetime := token.DefaultMachineTokenLifetime
 	machineTokenSigner, err := token.NewMachineTokenSigner(
@@ -180,12 +185,12 @@ func setupApi(logger *slog.Logger) (*api.API, func(context.Context) error, error
 	m2mStore := dynamo.NewM2MStore(db, dynamoDBTableName)
 
 	// JWKS serving: the public key set is derived once at startup from the
-	// same signing keys the signer uses. Rotation = SSM edit + redeploy.
-	jwksProvider := staticJWKSProvider{jwks: keypairJWKS(cfg.MachineSigningKeys)}
+	// configured signing keys.
+	jwksProvider := staticJWKSProvider{jwks: keypairJWKS(cfg.MachineSigningKeys, cfg.UserSigningKeys)}
 
 	loginAPI := api.NewAPI(api.Config{
 		GoogleTokenValidator: googleTokenValidator,
-		TokenService:         tokenService,
+		UserTokens:           userTokenSigner,
 		RefreshTokenStore:    refreshTokenStore,
 		MachineTokenSigner:   machineTokenSigner,
 		MachineTokenLifetime: machineTokenLifetime,

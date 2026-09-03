@@ -123,7 +123,7 @@ func (a *API) validateAccessTokenBearer(ctx context.Context, ai *openapi3filter.
 }
 
 func (a *API) validateAndSetAccessToken(ctx context.Context, ai *openapi3filter.AuthenticationInput, tokenString string, logger *slog.Logger) error {
-	claims, err := a.tokenService.ValidateAccessToken(tokenString)
+	claims, err := a.userTokens.ValidateUserAccessToken(ctx, tokenString)
 	if err != nil {
 		return fmt.Errorf("token is not valid: %w", err)
 	}
@@ -152,7 +152,7 @@ func (a *API) validateRefreshTokenCookie(ctx context.Context, ai *openapi3filter
 		return fmt.Errorf("refresh token was not found in cookie %q", refreshTokenCookieKey)
 	}
 
-	tokenID, err := a.tokenService.ValidateRefreshToken(refreshCookie.Value)
+	tokenID, err := a.userTokens.ValidateUserRefreshToken(ctx, refreshCookie.Value)
 	if err != nil {
 		return fmt.Errorf("refresh token is not valid: %w", err)
 	}
