@@ -58,6 +58,15 @@ func (f *fakeAdminStore) DeactivateClient(_ context.Context, id string) (*m2m.Cl
 	return c, nil
 }
 
+func (f *fakeAdminStore) UpdateAudiences(_ context.Context, id string, audiences map[string][]string) (*m2m.Client, error) {
+	c, ok := f.clients[id]
+	if !ok {
+		return nil, m2m.ErrClientNotFound
+	}
+	c.Audiences = audiences
+	return c, nil
+}
+
 func (f *fakeAdminStore) UpdateRounds(_ context.Context, id string, expected, next []string) error {
 	if f.casErr != nil {
 		return f.casErr
@@ -252,5 +261,47 @@ func TestRotateM2MClient(t *testing.T) {
 	resp, _ = a.PostLoginV1M2mClientsClientIdRotate(context.Background(), PostLoginV1M2mClientsClientIdRotateRequestObject{ClientId: "a"})
 	if _, ok := resp.(PostLoginV1M2mClientsClientIdRotate409JSONResponse); !ok {
 		t.Fatalf("expected 409 Conflict on concurrent rotation, got %T", resp)
+	}
+}
+func TestPatchM2MClient(t *testing.T) {
+	store := newFakeAdminStore()
+	store.clients["a"] = &m2m.Client{ID: "a", Audiences: map[string][]string{"b-api": {"m2m:c"}}, Active: true}
+	a := testProvisionAPI(store)
+
+	resp, err := a.PatchLoginV1M2mClientsClientId(context.Background(), PatchLoginV1M2mClientsClientIdRequestObject{
+		ClientId: "a",
+		Body: &PatchLoginV1M2mClientsClientIdJSONRequestBody{
+			Audiences: map[string][]string{"x-api": {"m2m:y"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	updated, ok := resp.(PatchLoginV1M2mClientsClientId200JSONResponse)
+	if !ok {
+		t.Fatalf("expected 200 response, got %T", resp)
+	}
+	if !reflect.DeepEqual(map[string][]string(updated.Audiences), map[string][]string{"x-api": {"m2m:y"}}) {
+		t.Fatalf("unexpected body: %+v", updated)
+	}
+
+	// Nil body → 400, unknown id → 404, bad values → 400.
+	resp, _ = a.PatchLoginV1M2mClientsClientId(context.Background(), PatchLoginV1M2mClientsClientIdRequestObject{ClientId: "a"})
+	if _, ok := resp.(PatchLoginV1M2mClientsClientId400JSONResponse); !ok {
+		t.Fatalf("expected 400 for nil body, got %T", resp)
+	}
+	resp, _ = a.PatchLoginV1M2mClientsClientId(context.Background(), PatchLoginV1M2mClientsClientIdRequestObject{
+		ClientId: "missing",
+		Body:     &PatchLoginV1M2mClientsClientIdJSONRequestBody{Audiences: map[string][]string{}},
+	})
+	if notFound, ok := resp.(PatchLoginV1M2mClientsClientId404JSONResponse); !ok || notFound.Code != NotFound {
+		t.Fatalf("expected 404 NotFound, got %T", resp)
+	}
+	resp, _ = a.PatchLoginV1M2mClientsClientId(context.Background(), PatchLoginV1M2mClientsClientIdRequestObject{
+		ClientId: "BAD!",
+		Body:     &PatchLoginV1M2mClientsClientIdJSONRequestBody{Audiences: map[string][]string{}},
+	})
+	if _, ok := resp.(PatchLoginV1M2mClientsClientId400JSONResponse); !ok {
+		t.Fatalf("expected 400 for bad id, got %T", resp)
 	}
 }

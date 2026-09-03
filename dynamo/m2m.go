@@ -354,6 +354,42 @@ func (s *M2MStore) UpdateRounds(ctx context.Context, clientID string, expected, 
 	return fmt.Errorf("machine client %q changed concurrently: %w", clientID, m2m.ErrRoundsConflict)
 }
 
+// UpdateAudiences replaces the audiences map (full replace; entries the
+// caller omitted are removed). Secrets and active state are untouched, so
+// this applies to revoked clients too. A missing id surfaces as
+// m2m.ErrClientNotFound.
+func (s *M2MStore) UpdateAudiences(ctx context.Context, clientID string, audiences map[string][]string) (*m2m.Client, error) {
+	audiencesAV, err := attributevalue.Marshal(audiences)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal audiences for %q: %w", clientID, err)
+	}
+
+	out, err := s.client.UpdateItem(ctx, &dynamodb.UpdateItemInput{
+		TableName:           aws.String(s.tableName),
+		Key:                 machineClientKey(clientID),
+		ConditionExpression: aws.String("attribute_exists(PK)"),
+		UpdateExpression:    aws.String("SET audiences = :audiences, updatedAt = :now"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":audiences": audiencesAV,
+			":now":       &types.AttributeValueMemberS{Value: s.clock.Now().UTC().Format(time.RFC3339)},
+		},
+		ReturnValues: types.ReturnValueAllNew,
+	})
+	if err != nil {
+		var condErr *types.ConditionalCheckFailedException
+		if errors.As(err, &condErr) {
+			return nil, fmt.Errorf("machine client %q not found: %w", clientID, m2m.ErrClientNotFound)
+		}
+		return nil, fmt.Errorf("failed to update audiences for %q: %w", clientID, err)
+	}
+
+	var item MachineClientItem
+	if err := attributevalue.UnmarshalMap(out.Attributes, &item); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal machine client %q: %w", clientID, err)
+	}
+	return machineClientFromItem(clientID, item), nil
+}
+
 func machineClientFromItem(clientID string, item MachineClientItem) *m2m.Client {
 	return &m2m.Client{
 		ID:           clientID,

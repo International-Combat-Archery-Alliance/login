@@ -144,8 +144,30 @@ func (a *API) provisionLogger(ctx context.Context) *slog.Logger {
 }
 
 func (a *API) PatchLoginV1M2mClientsClientId(ctx context.Context, request PatchLoginV1M2mClientsClientIdRequestObject) (PatchLoginV1M2mClientsClientIdResponseObject, error) {
-	return PatchLoginV1M2mClientsClientId500JSONResponse{
-		Message: "not implemented",
-		Code:    InternalError,
-	}, nil
+	ctx, span := a.tracer.Start(ctx, "PatchLoginV1M2mClientsClientId")
+	defer span.End()
+
+	logger := a.provisionLogger(ctx)
+
+	if request.Body == nil {
+		return PatchLoginV1M2mClientsClientId400JSONResponse{Message: "request body is required", Code: InputValidationError}, nil
+	}
+
+	client, err := a.provisioner.UpdateClient(ctx, request.ClientId, request.Body.Audiences, logger)
+	if err != nil {
+		switch {
+		case errors.Is(err, m2m.ErrInvalidClientID),
+			errors.Is(err, m2m.ErrInvalidAudience),
+			errors.Is(err, m2m.ErrInvalidScopes):
+			return PatchLoginV1M2mClientsClientId400JSONResponse{Message: err.Error(), Code: InputValidationError}, nil
+		case errors.Is(err, m2m.ErrClientNotFound):
+			return PatchLoginV1M2mClientsClientId404JSONResponse{Message: "machine client not found", Code: NotFound}, nil
+		default:
+			span.RecordError(err)
+			logger.Error("m2m client update failed", slog.String("clientId", request.ClientId))
+			return PatchLoginV1M2mClientsClientId500JSONResponse{Message: "internal error", Code: InternalError}, nil
+		}
+	}
+
+	return PatchLoginV1M2mClientsClientId200JSONResponse(provisionClientToModel(client)), nil
 }

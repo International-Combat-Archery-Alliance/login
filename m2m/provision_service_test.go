@@ -69,6 +69,20 @@ func (f *fakeProvisionStore) DeactivateClient(_ context.Context, id string) (*Cl
 	return copyClient(c), nil
 }
 
+func (f *fakeProvisionStore) UpdateAudiences(_ context.Context, id string, audiences map[string][]string) (*Client, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	c, ok := f.clients[id]
+	if !ok {
+		return nil, ErrClientNotFound
+	}
+	c.Audiences = map[string][]string{}
+	for aud, scopes := range audiences {
+		c.Audiences[aud] = append([]string{}, scopes...)
+	}
+	return copyClient(c), nil
+}
+
 func (f *fakeProvisionStore) UpdateRounds(_ context.Context, id string, expected, next []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -323,5 +337,56 @@ func TestProvisionList(t *testing.T) {
 	got, err := svc.ListClients(ctx)
 	if err != nil || len(got) != 2 {
 		t.Fatalf("expected 2 clients, got %v / %v", got, err)
+	}
+}
+
+func TestProvisionUpdateClient(t *testing.T) {
+	store := newFakeProvisionStore()
+	svc := NewProvisionService(store)
+	logger := slog.New(slog.DiscardHandler)
+	ctx := context.Background()
+
+	if _, err := svc.CreateClient(ctx, "a", testAudiences(), logger); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Full replace: omitted entries are removed, new ones added.
+	updated, err := svc.UpdateClient(ctx, "a",
+		map[string][]string{"events-api": {"m2m:events-read"}}, logger)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !reflect.DeepEqual(updated.Audiences, map[string][]string{"events-api": {"m2m:events-read"}}) {
+		t.Fatalf("unexpected audiences: %+v", updated)
+	}
+
+	// Clearing to {} strips all access but keeps the identity.
+	updated, err = svc.UpdateClient(ctx, "a", map[string][]string{}, logger)
+	if err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if len(updated.Audiences) != 0 {
+		t.Fatalf("expected empty audiences, got %+v", updated)
+	}
+
+	// Revoked clients accept metadata updates (exchanges still fail).
+	if _, err := svc.RevokeClient(ctx, "a", logger); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if _, err := svc.UpdateClient(ctx, "a", testAudiences(), logger); err != nil {
+		t.Fatalf("update of revoked client: %v", err)
+	}
+
+	if _, err := svc.UpdateClient(ctx, "missing", testAudiences(), logger); !errors.Is(err, ErrClientNotFound) {
+		t.Fatalf("expected ErrClientNotFound, got %v", err)
+	}
+	if _, err := svc.UpdateClient(ctx, "BAD!", testAudiences(), logger); !errors.Is(err, ErrInvalidClientID) {
+		t.Fatalf("expected ErrInvalidClientID, got %v", err)
+	}
+	if _, err := svc.UpdateClient(ctx, "a", map[string][]string{"Bad Aud!": {"m2m:x"}}, logger); !errors.Is(err, ErrInvalidAudience) {
+		t.Fatalf("expected ErrInvalidAudience, got %v", err)
+	}
+	if _, err := svc.UpdateClient(ctx, "a", map[string][]string{"x-api": {"bad"}}, logger); !errors.Is(err, ErrInvalidScopes) {
+		t.Fatalf("expected ErrInvalidScopes, got %v", err)
 	}
 }

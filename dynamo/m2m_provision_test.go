@@ -331,3 +331,45 @@ func TestUpdateRoundsConflictVsNotFound(t *testing.T) {
 		}
 	})
 }
+
+func TestUpdateAudiences(t *testing.T) {
+	f := &fakeProvisionDDB{}
+	f.updateResult = &dynamodb.UpdateItemOutput{Attributes: clientItemMap(t, MachineClientItem{
+		PK:           "CLIENT#a",
+		SK:           "CLIENT#a",
+		SecretRounds: []string{"hash"},
+		Audiences:    map[string][]string{"x-api": {"m2m:y"}},
+		Active:       true,
+		GSI1PK:       M2MClientsPartition,
+		GSI1SK:       "CLIENT#a",
+	})}
+	store := provisionTestStore(f)
+
+	client, err := store.UpdateAudiences(context.Background(), "a",
+		map[string][]string{"x-api": {"m2m:y"}})
+	if err != nil {
+		t.Fatalf("UpdateAudiences: %v", err)
+	}
+	if !reflect.DeepEqual(client.Audiences, map[string][]string{"x-api": {"m2m:y"}}) {
+		t.Fatalf("unexpected audiences: %+v", client)
+	}
+	req := f.updates[0]
+	if got := aws.ToString(req.ConditionExpression); got != "attribute_exists(PK)" {
+		t.Errorf("ConditionExpression = %q", got)
+	}
+	if got := aws.ToString(req.UpdateExpression); got != "SET audiences = :audiences, updatedAt = :now" {
+		t.Errorf("UpdateExpression = %q", got)
+	}
+	if _, ok := req.ExpressionAttributeValues[":audiences"].(*types.AttributeValueMemberM); !ok {
+		t.Errorf(":audiences = %T, want M (map replace, secrets untouched)", req.ExpressionAttributeValues[":audiences"])
+	}
+}
+
+func TestUpdateAudiencesNotFound(t *testing.T) {
+	f := &fakeProvisionDDB{updateCondFail: true}
+	store := provisionTestStore(f)
+
+	if _, err := store.UpdateAudiences(context.Background(), "missing", map[string][]string{}); !errors.Is(err, m2m.ErrClientNotFound) {
+		t.Fatalf("expected ErrClientNotFound, got %v", err)
+	}
+}
