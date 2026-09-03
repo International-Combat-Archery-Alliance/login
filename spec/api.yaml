@@ -134,7 +134,7 @@ paths:
           description: Target audience — must be one of the client's provisioned audiences.
           schema:
             type: string
-            pattern: '^[a-z0-9-]+-api$'
+            pattern: '^[a-z0-9-]{1,64}$'
             maxLength: 64
       responses:
         '200':

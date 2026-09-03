@@ -50,10 +50,8 @@ func TestValidateAudience(t *testing.T) {
 	}{
 		{name: "profiles", aud: "profiles-api", wantErr: false},
 		{name: "hyphenated callee", aud: "event-registration-api", wantErr: false},
-		{name: "global shape passes regex (per-callee choice is caller's)", aud: "icaa-api", wantErr: false},
+		{name: "no suffix required", aud: "profiles", wantErr: false},
 		{name: "empty", aud: "", wantErr: true},
-		{name: "missing suffix", aud: "profiles", wantErr: true},
-		{name: "wrong suffix", aud: "profiles-apis", wantErr: true},
 		{name: "uppercase", aud: "Profiles-api", wantErr: true},
 		{name: "slash", aud: "profiles/api", wantErr: true},
 	}
@@ -116,7 +114,7 @@ func TestValidateAudiences(t *testing.T) {
 		{name: "multiple", audiences: map[string][]string{"a-api": {"m2m:x"}, "b-api": {}}, wantErr: false},
 		{name: "nil", audiences: nil, wantErr: false},
 		{name: "empty", audiences: map[string][]string{}, wantErr: false},
-		{name: "bad key", audiences: map[string][]string{"profiles": {"m2m:x"}}, wantErr: true},
+		{name: "bad key", audiences: map[string][]string{"Bad Key!": {"m2m:x"}}, wantErr: true},
 		{name: "bad scope entry", audiences: map[string][]string{"profiles-api": {"nope"}}, wantErr: true},
 	}
 

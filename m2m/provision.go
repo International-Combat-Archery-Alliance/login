@@ -23,7 +23,7 @@ const (
 // keep both in sync.
 var (
 	clientIDPattern = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
-	audiencePattern = regexp.MustCompile(`^[a-z0-9-]+-api$`)
+	audiencePattern = regexp.MustCompile(`^[a-z0-9-]{1,64}$`)
 	scopePattern    = regexp.MustCompile(`^m2m:[a-z0-9-]+$`)
 )
 
@@ -42,11 +42,13 @@ func ValidateClientID(id string) error {
 	return nil
 }
 
-// ValidateAudience reports whether aud matches <callee>-api (per-callee
-// audience, never the global icaa-api).
+// ValidateAudience reports whether aud is a well-formed audience name.
+// The format is intentionally permissive (same charset as clientIds):
+// enforcement happens by exact match against the client's provisioned map
+// at exchange time and against the callee's own audience at verification.
 func ValidateAudience(aud string) error {
 	if !audiencePattern.MatchString(aud) {
-		return fmt.Errorf("%w: must match <callee>-api", ErrInvalidAudience)
+		return fmt.Errorf("%w: must match ^[a-z0-9-]{1,64}$", ErrInvalidAudience)
 	}
 	return nil
 }
@@ -65,8 +67,8 @@ func ValidateScopes(scopes []string) error {
 	return nil
 }
 
-// ValidateAudiences reports whether every audience key matches <callee>-api
-// with every scope entry matching m2m:<callee-scope>. Empty is allowed: a
+// ValidateAudiences reports whether every audience key is well-formed with
+// every scope entry matching m2m:<callee-scope>. Empty is allowed: a
 // client with no audiences authenticates but authorizes nowhere.
 func ValidateAudiences(audiences map[string][]string) error {
 	for aud, scopes := range audiences {
