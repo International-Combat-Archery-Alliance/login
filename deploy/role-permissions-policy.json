@@ -63,6 +63,15 @@
       "Resource": "*"
     },
     {
+      "Sid": "EcrPublicAuth",
+      "Effect": "Allow",
+      "Action": [
+        "ecr-public:GetAuthorizationToken",
+        "sts:GetServiceBearerToken"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "LambdaFunctions",
       "Effect": "Allow",
       "Action": "lambda:*",

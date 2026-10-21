@@ -50,6 +50,9 @@ jobs:
         role-to-assume: arn:aws:iam::197461532156:role/login-github-deploy
         aws-region: ${{ env.AWS_REGION }}
 
+    - name: Login to ECR Public
+      run: aws ecr-public get-login-password --region us-east-1 | docker login --username AWS --password-stdin public.ecr.aws
+
     - name: SAM build
       run: sam build --parameter-overrides architecture=x86_64
 

@@ -38,7 +38,7 @@ fi
 
 sids="$(aws iam get-role-policy --role-name "$ROLE" --policy-name "$POLICY" \
   --query 'PolicyDocument.Statement[].Sid' --output text 2>/dev/null)"
-expected="ApiGateway CloudFormationReads CloudFormationStack EcrAuth EcrImagePush ExecutionRole LambdaFunctions LogGroup LogGroupReads SamArtifactsBucket SamTransform"
+expected="ApiGateway CloudFormationReads CloudFormationStack EcrAuth EcrImagePush EcrPublicAuth ExecutionRole LambdaFunctions LogGroup LogGroupReads SamArtifactsBucket SamTransform"
 if [ "$(echo "$sids" | tr '\t\n' ' ' | tr ' ' '\n' | sort | tr '\n' ' ' | xargs)" = "$expected" ]; then
   ok "inline policy $POLICY has all 9 statements"
 else
