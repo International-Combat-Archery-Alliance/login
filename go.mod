@@ -1,6 +1,6 @@
 module github.com/International-Combat-Archery-Alliance/login
 
-go 1.25.0
+go 1.27.3
 
 tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen
 
