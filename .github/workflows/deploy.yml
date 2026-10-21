@@ -1,0 +1,57 @@
+# Deploys to production on merge to main. Auth is OIDC (no stored AWS keys);
+# see deploy/README.md for the one-time role setup.
+
+name: Deploy
+permissions:
+  contents: read
+  id-token: write
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+concurrency:
+  group: prod-deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  TEST_IN_CI: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.27'
+
+    - name: Vet
+      run: go vet ./...
+
+    - name: Build
+      run: go build -v ./...
+
+    - name: Test
+      run: go test -race -v ./...
+
+    - name: Set up SAM CLI
+      uses: aws-actions/setup-sam@v2
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        # Not a secret: the trust policy only allows this repo's main branch
+        # via GitHub OIDC, so the ARN alone grants nothing.
+        role-to-assume: arn:aws:iam::197461532156:role/login-github-deploy
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: SAM build
+      run: sam build --parameter-overrides architecture=x86_64
+
+    - name: SAM deploy
+      run: sam deploy --no-confirm-changeset --no-fail-on-empty-changeset

@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine AS build_base
+FROM golang:1.27-alpine AS build_base
 
 WORKDIR /app
 
@@ -9,9 +9,9 @@ ADD . /app/
 
 RUN go build -o bootstrap ./cmd
 
-FROM alpine
+FROM alpine:3.22
 
-RUN apk add ca-certificates
+RUN apk add --no-cache ca-certificates
 
 COPY --from=public.ecr.aws/awsguru/aws-lambda-adapter:0.9.1 /lambda-adapter /opt/extensions/lambda-adapter
 COPY --from=build_base /app/bootstrap /app/bootstrap
