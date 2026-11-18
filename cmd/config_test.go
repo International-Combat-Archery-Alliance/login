@@ -103,9 +103,11 @@ func TestGetApiEnvironment(t *testing.T) {
 		}
 	})
 
-	t.Run("local outside lambda", func(t *testing.T) {
+	t.Run("local under sam local", func(t *testing.T) {
+		// `sam local start-api` sets AWS_LAMBDA_FUNCTION_NAME inside its
+		// containers but not AWS_EXECUTION_ENVIRONMENT, so this is LOCAL.
 		t.Setenv("AWS_SAM_LOCAL", "true")
-		t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "")
+		t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "ICAALogin")
 		t.Setenv("AWS_EXECUTION_ENVIRONMENT", "")
 		env, err := getApiEnvironment()
 		if err != nil {
@@ -121,13 +123,9 @@ func TestGetApiEnvironment(t *testing.T) {
 		// dev keys are never installed in a real runtime.
 		t.Setenv("AWS_SAM_LOCAL", "true")
 		t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "login")
-		if _, err := getApiEnvironment(); err == nil {
-			t.Fatal("expected LOCAL mode inside a Lambda runtime to be rejected")
-		}
-		t.Setenv("AWS_LAMBDA_FUNCTION_NAME", "")
 		t.Setenv("AWS_EXECUTION_ENVIRONMENT", "AWS_Lambda_go1.x")
 		if _, err := getApiEnvironment(); err == nil {
-			t.Fatal("expected LOCAL mode inside a Lambda runtime (AWS_EXECUTION_ENVIRONMENT) to be rejected")
+			t.Fatal("expected LOCAL mode inside a Lambda runtime to be rejected")
 		}
 	})
 }
