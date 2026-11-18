@@ -256,8 +256,9 @@ func getApiEnvironment() (api.Environment, error) {
 	if isLocal() {
 		// Fail closed: LOCAL mode installs ephemeral dev keys (machine keypair
 		// + static dev JWKS). AWS_SAM_LOCAL is set by `sam local`, never by
-		// the Lambda runtime, so this combination can only be a prod
-		// misconfig — refuse to boot with dev key material instead.
+		// the Lambda runtime, so a real runtime that also sees
+		// AWS_SAM_LOCAL=true is a prod misconfig — refuse to boot with dev
+		// key material instead.
 		if insideLambdaRuntime() {
 			return 0, fmt.Errorf("AWS_SAM_LOCAL=true but running in an AWS Lambda runtime; refusing LOCAL mode")
 		}
@@ -267,9 +268,12 @@ func getApiEnvironment() (api.Environment, error) {
 }
 
 // insideLambdaRuntime reports whether the process is running in a real Lambda
-// execution environment (neither is set under `sam local start-api`).
+// execution environment. AWS_EXECUTION_ENVIRONMENT is set only by the managed
+// Lambda runtime; `sam local start-api` also sets AWS_LAMBDA_FUNCTION_NAME
+// inside its containers, so that variable alone must not be treated as a real
+// runtime.
 func insideLambdaRuntime() bool {
-	return os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" || os.Getenv("AWS_EXECUTION_ENVIRONMENT") != ""
+	return os.Getenv("AWS_EXECUTION_ENVIRONMENT") != ""
 }
 
 func isLocal() bool {
